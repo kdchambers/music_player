@@ -120,6 +120,9 @@ const memory_size = indices_range_size + vertices_range_size;
 var glyph_set: text.GlyphSet = undefined;
 
 var vertex_buffer: []QuadFace(GenericVertex) = undefined;
+
+// TODO: This is actually a count of the quads.
+//       All it does it let us determine the number of indices to render
 var vertex_buffer_count: u32 = 0;
 
 const enable_validation_layers = if (builtin.mode == .Debug) true else false;
@@ -1277,6 +1280,77 @@ fn customActions(action_id: u16) void {
 }
 
 var audio_files: FixedBuffer([:0]const u8, 20) = undefined;
+var update_media_icon_action_id_opt: ?u32 = null;
+
+fn handleAudioPlay(allocator: *Allocator, action_payload: ActionPayloadAudioPlay) !void {
+
+    // TODO: If track is already set, update
+    const audio_track_name = audio_files.items[action_payload.id];
+    log.info("Playing track {s}", .{audio_track_name});
+
+    const paths: [2][]const u8 = .{ music_dir_path, audio_track_name };
+    const full_path = std.fs.path.joinZ(allocator, paths[0..]) catch null;
+    defer allocator.free(full_path.?);
+
+    audio.flac.playFile(allocator, full_path.?) catch |err| {
+        log.err("Failed to play music", .{});
+    };
+
+    std.time.sleep(50000000);
+    assert(audio.output.getState() == .playing);
+}
+
+fn handleUpdateVertices(allocator: *Allocator, action_payload: *ActionPayloadVerticesUpdate) !void {
+    const vertices = @ptrCast([*]GenericVertex, @alignCast(16, &mapped_device_memory[vertices_range_index_begin]));
+
+    // TODO: All added for consistency but some variables not used
+    // TODO: Updated members of update_vertices to reflect values are for quads, not vertices
+    const loaded_vertex_begin = @intCast(u32, action_payload.loaded_vertex_begin) * 4;
+    const alternate_vertex_begin = action_payload.alternate_vertex_begin * 4;
+
+    const loaded_quad_begin = @intCast(u32, action_payload.loaded_vertex_begin);
+    const alternate_quad_begin = action_payload.alternate_vertex_begin;
+
+    const loaded_vertex_count = action_payload.loaded_vertex_count * 4;
+    const alternate_vertex_count = action_payload.alternate_vertex_count * 4;
+
+    const loaded_vertex_quad_count = action_payload.loaded_vertex_count;
+    const alternate_vertex_quad_count = action_payload.alternate_vertex_count;
+
+    var alternate_base_vertex: [*]GenericVertex = &inactive_vertices_attachments.items[alternate_quad_begin];
+
+    const largest_range_vertex_count = if (alternate_vertex_count > loaded_vertex_count) alternate_vertex_count else loaded_vertex_count;
+
+    var temp_swap_buffer = allocator.alloc(GenericVertex, largest_range_vertex_count) catch |err| {
+        log.err("Failed to allocate temporary swapping buffer for alternatve vertices", .{});
+        return;
+    };
+    defer allocator.free(temp_swap_buffer);
+
+    {
+        var i: u32 = 0;
+        while (i < (largest_range_vertex_count)) : (i += 1) {
+            temp_swap_buffer[i] = vertices[loaded_vertex_begin + i];
+            if (i < alternate_vertex_count) {
+                vertices[loaded_vertex_begin + i] = if (i < alternate_vertex_count)
+                    alternate_base_vertex[i]
+                else
+                    null_face[0];
+            }
+        }
+    }
+
+    // Now we need to copy back our swapped out loaded vertices into the alternate vertices buffer
+    for (temp_swap_buffer) |vertex, i| {
+        alternate_base_vertex[i] = vertex;
+    }
+
+    const temporary_vertex_count = action_payload.loaded_vertex_count;
+    action_payload.loaded_vertex_count = action_payload.alternate_vertex_count;
+    action_payload.alternate_vertex_count = temporary_vertex_count;
+
+    log.info("Updating vertices", .{});
+}
 
 fn handleMouseEvents(x: f64, y: f64, is_pressed_left: bool, is_pressed_right: bool) void {
     const half_width = @intToFloat(f32, screen_dimensions.width) / 2.0;
@@ -1321,22 +1395,22 @@ fn handleMouseEvents(x: f64, y: f64, is_pressed_left: bool, is_pressed_right: bo
                 }
             },
             .audio_play => {
-                if (audio.output.getState() == .stopped) {
-                    const audio_track_name = audio_files.items[action.payload.audio_play.id];
-                    log.info("Playing track {s}", .{audio_track_name});
-                    var allocator = std.heap.c_allocator;
-                    const paths: [2][]const u8 = .{ music_dir_path, audio_track_name };
-                    const full_path = std.fs.path.joinZ(allocator, paths[0..]) catch null;
-                    defer allocator.free(full_path.?);
+                const is_media_icon_resume = (audio.output.getState() != .playing);
+                var allocator = std.heap.c_allocator;
+                handleAudioPlay(allocator, action.payload.audio_play) catch |err| {
+                    log.err("Failed to play audio track", .{});
+                };
 
-                    audio.flac.playFile(allocator, full_path.?) catch |err| {
-                        log.err("Failed to play music", .{});
-                    };
-                    std.time.sleep(10000000);
-                    assert(audio.output.getState() == .playing);
-                    // text_buffer_dirty = true;
-                } else {
-                    log.info("Audio already playing..", .{});
+                //
+                // If the media icon is set to `resume` (I.e Triangle) we need to update it to `pause`
+                //
+
+                if (is_media_icon_resume) {
+                    if (update_media_icon_action_id_opt) |update_media_icon_action_id| {
+                        handleUpdateVertices(allocator, &system_actions.items[update_media_icon_action_id].payload.update_vertices) catch |err| {
+                            log.err("Failed to update vertices for animation", .{});
+                        };
+                    }
                 }
             },
             .audio_pause => {
@@ -1358,59 +1432,14 @@ fn handleMouseEvents(x: f64, y: f64, is_pressed_left: bool, is_pressed_right: bo
                 }
             },
             .update_vertices => {
-
-                // TODO: All added for consistency but some variables not used
-                // TODO: Updated members of update_vertices to reflect values are for quads, not vertices
-                const loaded_vertex_begin = @intCast(u32, action.payload.update_vertices.loaded_vertex_begin) * 4;
-                const alternate_vertex_begin = action.payload.update_vertices.alternate_vertex_begin * 4;
-
-                const loaded_quad_begin = @intCast(u32, action.payload.update_vertices.loaded_vertex_begin);
-                const alternate_quad_begin = action.payload.update_vertices.alternate_vertex_begin;
-
-                const loaded_vertex_count = action.payload.update_vertices.loaded_vertex_count * 4;
-                const alternate_vertex_count = action.payload.update_vertices.alternate_vertex_count * 4;
-
-                const loaded_vertex_quad_count = action.payload.update_vertices.loaded_vertex_count;
-                const alternate_vertex_quad_count = action.payload.update_vertices.alternate_vertex_count;
-
-                var alternate_base_vertex: [*]GenericVertex = &inactive_vertices_attachments.items[alternate_quad_begin];
-
-                const largest_range_vertex_count = if (alternate_vertex_count > loaded_vertex_count) alternate_vertex_count else loaded_vertex_count;
-
                 // TODO:
                 var gpa = std.heap.GeneralPurposeAllocator(.{}){};
                 defer _ = gpa.deinit();
                 const allocator = &gpa.allocator;
 
-                var temp_swap_buffer = allocator.alloc(GenericVertex, largest_range_vertex_count) catch |err| {
-                    log.err("Failed to allocate temporary swapping buffer for alternatve vertices", .{});
-                    return;
+                handleUpdateVertices(allocator, &action.payload.update_vertices) catch |err| {
+                    log.err("Failed to update vertices for animation", .{});
                 };
-                defer allocator.free(temp_swap_buffer);
-
-                {
-                    var i: u32 = 0;
-                    while (i < (largest_range_vertex_count)) : (i += 1) {
-                        temp_swap_buffer[i] = vertices[loaded_vertex_begin + i];
-                        if (i < alternate_vertex_count) {
-                            vertices[loaded_vertex_begin + i] = if (i < alternate_vertex_count)
-                                alternate_base_vertex[i]
-                            else
-                                null_face[0];
-                        }
-                    }
-                }
-
-                // Now we need to copy back our swapped out loaded vertices into the alternate vertices buffer
-                for (temp_swap_buffer) |vertex, i| {
-                    alternate_base_vertex[i] = vertex;
-                }
-
-                const temporary_vertex_count = action.payload.update_vertices.loaded_vertex_count;
-                action.payload.update_vertices.loaded_vertex_count = action.payload.update_vertices.alternate_vertex_count;
-                action.payload.update_vertices.alternate_vertex_count = temporary_vertex_count;
-
-                log.info("Updating vertices", .{});
             },
             .custom => {
                 customActions(action.payload.custom.id);
@@ -1463,6 +1492,11 @@ const ActionPayloadVerticesUpdate = packed struct {
     alternate_vertex_count: u4,
 };
 
+const ActionPayloadRedirect = packed struct {
+    action_1: u12,
+    action_2: u12,
+};
+
 const ActionPayloadAudioResume = packed struct {
     dummy: u24,
 };
@@ -1487,6 +1521,7 @@ const ActionPayload = packed union {
     audio_pause: ActionPayloadAudioPause,
     audio_resume: ActionPayloadAudioResume,
     update_vertices: ActionPayloadVerticesUpdate,
+    redirect: ActionPayloadRedirect,
     custom: ActionPayloadCustom,
 };
 
@@ -1679,11 +1714,6 @@ fn update(allocator: *Allocator, app: *GraphicsContext) !void {
         break :blk try gui.image.generate(GenericVertex, face_allocator, 2.0, extent);
     };
 
-    const max_files: u32 = 10;
-    var file_index: u32 = 0;
-
-    var addicional_vertices: usize = 0;
-
     //
     // Dimensions for media pause / play button
     //
@@ -1725,120 +1755,114 @@ fn update(allocator: *Allocator, app: *GraphicsContext) !void {
     _ = inactive_vertices_attachments.append(playing_icon_faces[0]);
     _ = inactive_vertices_attachments.append(playing_icon_faces[1]);
 
-    var i: u32 = 0;
-    while (i < audio_files.count) : (i += 1) {
-        const track_name = audio_files.items[i];
+    //
+    // Generate our Media (pause / resume) button
+    //
 
-        const placement = geometry.Coordinates2D(.ndc_right){ .x = -0.8, .y = -0.8 + (@intToFloat(f32, file_index) * 0.075) };
-        const dimensions = geometry.Dimensions2D(.pixel){ .width = 600, .height = 30 };
+    assert(audio.output.getState() != .playing);
+    log.info("Generating play button", .{});
 
-        const extent = geometry.Extent2D(.ndc_right){
-            .x = placement.x,
-            .y = placement.y,
-            .width = geometry.pixelToNativeDeviceCoordinateRight(dimensions.width, scale_factor.horizontal),
-            .height = geometry.pixelToNativeDeviceCoordinateRight(dimensions.height, scale_factor.vertical),
-        };
+    // NOTE: Even though we only need one face to generate a triangle,
+    //       we need to reserve a second for the resumed icon
+    var media_button_paused_faces = try face_allocator.alloc(QuadFace(GenericVertex), 2);
 
-        const background_color = RGBA(f32){ .r = 0.9, .g = 0.5, .b = 0.5, .a = 1.0 };
-        const label_color = RGBA(f32){ .r = 0.0, .g = 0.0, .b = 0.0, .a = 1.0 };
-
-        const faces = try gui.button.generate(GenericVertex, face_allocator, glyph_set, track_name, extent, scale_factor, background_color, label_color);
-
-        const on_left_click_event_id = event_system.registerMouseLeftPressAction(extent);
-
-        const on_left_click_action_payload = ActionPayloadAudioPlay{
-            .id = @intCast(u16, file_index),
+    {
+        const media_button_on_left_click_event_id = event_system.registerMouseLeftPressAction(media_button_paused_extent);
+        const media_button_resume_audio_action_payload = ActionPayloadAudioResume{
             .dummy = 0,
         };
 
-        const on_left_click_action = Action{ .action_type = .audio_play, .payload = .{ .audio_play = on_left_click_action_payload } };
-        assert(on_left_click_event_id == system_actions.append(on_left_click_action));
-
-        // Register a mouse_hover event that will change the color of the button
-        const on_hover_color = RGBA(f32){ .r = 0.1, .g = 0.2, .b = 0.3, .a = 1.0 };
-
-        const background_color_index = color_list.append(background_color);
-        const on_hover_color_index = color_list.append(on_hover_color);
-
-        // NOTE: system_actions needs to correspond to given on_hover_event_ids here
-        const on_hover_event_ids = event_system.registerMouseHoverReflexiveEnterAction(extent);
-
-        // Index of the quad face (I.e Mulples of 4 faces) within the face allocator
-        const widget_index = calculateQuadIndex(vertices, faces);
-
-        const vertex_attachment_index = @intCast(u8, vertex_range_attachments.append(.{ .vertex_begin = widget_index, .vertex_count = gui.button.face_count }));
-
-        const on_hover_enter_action_payload = ActionPayloadColorSet{
-            .vertex_range_begin = vertex_attachment_index,
-            .vertex_range_span = 1,
-            .color_index = @intCast(u8, on_hover_color_index),
-        };
-
-        const on_hover_exit_action_payload = ActionPayloadColorSet{
-            .vertex_range_begin = vertex_attachment_index,
-            .vertex_range_span = 1,
-            .color_index = @intCast(u8, background_color_index),
-        };
-
-        const on_hover_exit_action = Action{ .action_type = .color_set, .payload = .{ .color_set = on_hover_exit_action_payload } };
-        const on_hover_enter_action = Action{ .action_type = .color_set, .payload = .{ .color_set = on_hover_enter_action_payload } };
-
-        log.info("Event ids for button: {d} {d}", .{ on_hover_event_ids[0], on_hover_event_ids[1] });
-
-        assert(on_hover_event_ids[0] == system_actions.append(on_hover_enter_action));
-        assert(on_hover_event_ids[1] == system_actions.append(on_hover_exit_action));
-
-        {}
-
-        addicional_vertices += faces.len;
-        file_index += 1;
+        const media_button_resume_audio_action = Action{ .action_type = .audio_resume, .payload = .{ .audio_resume = media_button_resume_audio_action_payload } };
+        assert(media_button_on_left_click_event_id == system_actions.append(media_button_resume_audio_action));
     }
 
-    const play_button_faces_count = blk: {
-        assert(audio.output.getState() != .playing);
+    media_button_paused_faces[0] = graphics.generateTriangleColored(GenericVertex, media_button_paused_extent, media_button_color);
+    media_button_paused_faces[1] = null_face;
 
-        log.info("Generating play button", .{});
+    // Let's add a second left_click event emitter to change the icon
+    const media_button_on_left_click_event_id = event_system.registerMouseLeftPressAction(media_button_paused_extent);
+    const media_button_paused_quad_index = @intCast(u16, (@ptrToInt(&media_button_paused_faces[0]) - @ptrToInt(vertices)) / @sizeOf(QuadFace(GenericVertex)));
 
-        // NOTE: Even though we only need one face to generate a triangle,
-        //       we need to reserve a second for the resumed icon
-        var background_faces = try face_allocator.alloc(QuadFace(GenericVertex), 2);
+    // Needs to git into a u10
+    assert(media_button_paused_quad_index <= std.math.pow(u32, 2, 10));
 
-        {
-            const on_left_click_event_id = event_system.registerMouseLeftPressAction(media_button_paused_extent);
-            const on_left_click_action_payload = ActionPayloadAudioResume{
-                .dummy = 0,
-            };
-
-            const on_left_click_action = Action{ .action_type = .audio_resume, .payload = .{ .audio_resume = on_left_click_action_payload } };
-            assert(on_left_click_event_id == system_actions.append(on_left_click_action));
-        }
-
-        background_faces[0] = graphics.generateTriangleColored(GenericVertex, media_button_paused_extent, media_button_color);
-        background_faces[1] = null_face;
-
-        {
-            // Let's add a second left_click event emitter to change the icon
-            const on_left_click_event_id = event_system.registerMouseLeftPressAction(media_button_paused_extent);
-            const vertex_quad_index = @intCast(u16, (@ptrToInt(&background_faces[0]) - @ptrToInt(vertices)) / @sizeOf(QuadFace(GenericVertex)));
-
-            log.info("Vertex quad index: {}", .{vertex_quad_index});
-            assert(vertex_quad_index <= std.math.pow(u32, 2, 10));
-
-            const on_left_click_action_payload = ActionPayloadVerticesUpdate{
-                .loaded_vertex_begin = @intCast(u10, vertex_quad_index),
-                .loaded_vertex_count = 1,
-                .alternate_vertex_begin = 0,
-                .alternate_vertex_count = 2, // Number of faces
-            };
-
-            const on_left_click_action = Action{ .action_type = .update_vertices, .payload = .{ .update_vertices = on_left_click_action_payload } };
-            assert(on_left_click_event_id == system_actions.append(on_left_click_action));
-        }
-
-        break :blk background_faces.len;
+    // const media_button_on_left_click_action_payload = ActionPayloadVerticesUpdate{
+    const media_button_update_icon_action_payload = ActionPayloadVerticesUpdate{
+        .loaded_vertex_begin = @intCast(u10, media_button_paused_quad_index),
+        .loaded_vertex_count = 1,
+        .alternate_vertex_begin = 0,
+        .alternate_vertex_count = 2, // Number of faces
     };
 
-    vertex_buffer_count += @intCast(u32, play_button_faces_count + proceed_button.len + nice_image.len + addicional_vertices);
+    const media_button_update_icon_action = Action{ .action_type = .update_vertices, .payload = .{ .update_vertices = media_button_update_icon_action_payload } };
+    update_media_icon_action_id_opt = system_actions.append(media_button_update_icon_action);
+
+    assert(update_media_icon_action_id_opt.? == media_button_on_left_click_event_id);
+
+    // TODO:
+    var addicional_vertices: usize = 0;
+    for (audio_files.items[0..audio_files.count]) |track_name, track_index| {
+        const track_item_placement = geometry.Coordinates2D(.ndc_right){ .x = -0.8, .y = -0.8 + (@intToFloat(f32, track_index) * 0.075) };
+        const track_item_dimensions = geometry.Dimensions2D(.pixel){ .width = 600, .height = 30 };
+
+        const track_item_extent = geometry.Extent2D(.ndc_right){
+            .x = track_item_placement.x,
+            .y = track_item_placement.y,
+            .width = geometry.pixelToNativeDeviceCoordinateRight(track_item_dimensions.width, scale_factor.horizontal),
+            .height = geometry.pixelToNativeDeviceCoordinateRight(track_item_dimensions.height, scale_factor.vertical),
+        };
+
+        const track_item_background_color = RGBA(f32){ .r = 0.9, .g = 0.5, .b = 0.5, .a = 1.0 };
+        const track_item_label_color = RGBA(f32){ .r = 0.0, .g = 0.0, .b = 0.0, .a = 1.0 };
+
+        const track_item_faces = try gui.button.generate(GenericVertex, face_allocator, glyph_set, track_name, track_item_extent, scale_factor, track_item_background_color, track_item_label_color);
+
+        const track_item_on_left_click_event_id = event_system.registerMouseLeftPressAction(track_item_extent);
+
+        const track_item_audio_play_action_payload = ActionPayloadAudioPlay{
+            .id = @intCast(u16, track_index),
+            .dummy = 0,
+        };
+
+        const track_item_audio_play_action = Action{ .action_type = .audio_play, .payload = .{ .audio_play = track_item_audio_play_action_payload } };
+        assert(track_item_on_left_click_event_id == system_actions.append(track_item_audio_play_action));
+
+        // Register a mouse_hover event that will change the color of the button
+        const track_item_on_hover_color = RGBA(f32){ .r = 0.1, .g = 0.2, .b = 0.3, .a = 1.0 };
+
+        const track_item_background_color_index = color_list.append(track_item_background_color);
+        const track_item_on_hover_color_index = color_list.append(track_item_on_hover_color);
+
+        // NOTE: system_actions needs to correspond to given on_hover_event_ids here
+        const track_item_on_hover_event_ids = event_system.registerMouseHoverReflexiveEnterAction(track_item_extent);
+
+        // Index of the quad face (I.e Mulples of 4 faces) within the face allocator
+        const track_item_quad_index = calculateQuadIndex(vertices, track_item_faces);
+
+        const track_item_update_color_vertex_attachment_index = @intCast(u8, vertex_range_attachments.append(.{ .vertex_begin = track_item_quad_index, .vertex_count = gui.button.face_count }));
+
+        const track_item_update_color_enter_action_payload = ActionPayloadColorSet{
+            .vertex_range_begin = track_item_update_color_vertex_attachment_index,
+            .vertex_range_span = 1,
+            .color_index = @intCast(u8, track_item_on_hover_color_index),
+        };
+
+        const track_item_update_color_exit_action_payload = ActionPayloadColorSet{
+            .vertex_range_begin = track_item_update_color_vertex_attachment_index,
+            .vertex_range_span = 1,
+            .color_index = @intCast(u8, track_item_background_color_index),
+        };
+
+        const track_item_update_color_enter_action = Action{ .action_type = .color_set, .payload = .{ .color_set = track_item_update_color_enter_action_payload } };
+        const track_item_update_color_exit_action = Action{ .action_type = .color_set, .payload = .{ .color_set = track_item_update_color_exit_action_payload } };
+
+        assert(track_item_on_hover_event_ids[0] == system_actions.append(track_item_update_color_enter_action));
+        assert(track_item_on_hover_event_ids[1] == system_actions.append(track_item_update_color_exit_action));
+
+        addicional_vertices += track_item_faces.len;
+    }
+
+    vertex_buffer_count += @intCast(u32, media_button_paused_faces.len + proceed_button.len + nice_image.len + addicional_vertices);
 
     text_buffer_dirty = false;
     is_render_requested = true;
