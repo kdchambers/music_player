@@ -365,6 +365,17 @@ pub fn main() !void {
     try setupApplication(allocator, &graphics_context);
 
     try appLoop(allocator, &graphics_context);
+
+    //
+    // Deallocate resources
+    //
+
+    for (audio_files.items[0..audio_files.count]) |audio_file| {
+        allocator.free(audio_file);
+    }
+    allocator.free(glyph_set.image);
+    allocator.free(second_image.?);
+
     cleanupSwapchain(allocator, &graphics_context);
     clean(allocator, &graphics_context);
 
