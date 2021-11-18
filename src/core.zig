@@ -373,8 +373,6 @@ pub fn main() !void {
     for (audio_files.items[0..audio_files.count]) |audio_file| {
         allocator.free(audio_file);
     }
-    allocator.free(glyph_set.image);
-    allocator.free(second_image.?);
 
     cleanupSwapchain(allocator, &graphics_context);
     clean(allocator, &graphics_context);
@@ -390,6 +388,9 @@ fn clean(allocator: *Allocator, app: *GraphicsContext) void {
 
     allocator.free(app.swapchain_image_views);
     allocator.free(app.swapchain_images);
+
+    allocator.free(glyph_set.image);
+    allocator.free(second_image.?);
 
     texture_pipeline.deinit(allocator);
     glyph_set.deinit(allocator);
@@ -1299,7 +1300,7 @@ fn handleMouseEvents(x: f64, y: f64, is_pressed_left: bool, is_pressed_right: bo
     for (triggered_events.toSlice()) |event_id| {
         // TODO: Determine the action type based on offsets
 
-        const action = system_actions.items[event_id];
+        var action = system_actions.items[event_id];
 
         switch (action.action_type) {
             .color_set => {
@@ -1312,9 +1313,6 @@ fn handleMouseEvents(x: f64, y: f64, is_pressed_left: bool, is_pressed_right: bo
                 assert(action.payload.color_set.vertex_range_span == 1);
 
                 const vertices_end = vertices_begin + (vertex_range_attachments.items[action.payload.color_set.vertex_range_begin].vertex_count * 4);
-
-                // const vertices_begin = action.payload.color_set.vertex_begin * 4;
-                // const vertices_end = vertices_begin + (action.payload.color_set.vertex_count * 4);
 
                 assert(vertices_end > vertices_begin);
 
@@ -1360,32 +1358,57 @@ fn handleMouseEvents(x: f64, y: f64, is_pressed_left: bool, is_pressed_right: bo
                 }
             },
             .update_vertices => {
-                const loaded_vertex_begin = @intCast(u32, action.payload.update_vertices.loaded_vertex_begin) * 4;
-                const alternate_vertex_begin = action.payload.update_vertices.alternate_vertex_begin;
 
-                const loaded_vertex_count = action.payload.update_vertices.loaded_vertex_count;
-                const alternate_vertex_count = action.payload.update_vertices.alternate_vertex_count;
+                // TODO: All added for consistency but some variables not used
+                // TODO: Updated members of update_vertices to reflect values are for quads, not vertices
+                const loaded_vertex_begin = @intCast(u32, action.payload.update_vertices.loaded_vertex_begin) * 4;
+                const alternate_vertex_begin = action.payload.update_vertices.alternate_vertex_begin * 4;
+
+                const loaded_quad_begin = @intCast(u32, action.payload.update_vertices.loaded_vertex_begin);
+                const alternate_quad_begin = action.payload.update_vertices.alternate_vertex_begin;
+
+                const loaded_vertex_count = action.payload.update_vertices.loaded_vertex_count * 4;
+                const alternate_vertex_count = action.payload.update_vertices.alternate_vertex_count * 4;
+
+                const loaded_vertex_quad_count = action.payload.update_vertices.loaded_vertex_count;
+                const alternate_vertex_quad_count = action.payload.update_vertices.alternate_vertex_count;
+
+                var alternate_base_vertex: [*]GenericVertex = &inactive_vertices_attachments.items[alternate_quad_begin];
+
+                const largest_range_vertex_count = if (alternate_vertex_count > loaded_vertex_count) alternate_vertex_count else loaded_vertex_count;
 
                 // TODO:
-                // For now, don't support swapping vertex ranges of different types
-                // assert(loaded_vertex_count == alternate_vertex_count);
-                assert(alternate_vertex_begin == 0);
-                assert(loaded_vertex_count == 1);
+                var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+                defer _ = gpa.deinit();
+                const allocator = &gpa.allocator;
 
-                log.info("Inactive vertices attachments count: {d}", .{inactive_vertices_attachments.count});
-                assert(inactive_vertices_attachments.count == 2);
+                var temp_swap_buffer = allocator.alloc(GenericVertex, largest_range_vertex_count) catch |err| {
+                    log.err("Failed to allocate temporary swapping buffer for alternatve vertices", .{});
+                    return;
+                };
+                defer allocator.free(temp_swap_buffer);
 
-                // const loaded_base_vertex = @ptrCast([*]GenericVertex, @alignCast(16, &mapped_device_memory[vertices_range_index_begin + (loaded_vertex_begin * 4)]));
-                var alternate_base_vertex: [*]GenericVertex = &inactive_vertices_attachments.items[alternate_vertex_begin];
-
-                for (vertices[loaded_vertex_begin .. loaded_vertex_begin + (alternate_vertex_count * 4)]) |*vertex, i| {
-                    log.info("i: {}", .{i});
-                    vertex.x = alternate_base_vertex[i].x;
-                    vertex.y = alternate_base_vertex[i].y;
-                    vertex.color = alternate_base_vertex[i].color;
+                {
+                    var i: u32 = 0;
+                    while (i < (largest_range_vertex_count)) : (i += 1) {
+                        temp_swap_buffer[i] = vertices[loaded_vertex_begin + i];
+                        if (i < alternate_vertex_count) {
+                            vertices[loaded_vertex_begin + i] = if (i < alternate_vertex_count)
+                                alternate_base_vertex[i]
+                            else
+                                null_face[0];
+                        }
+                    }
                 }
 
-                //
+                // Now we need to copy back our swapped out loaded vertices into the alternate vertices buffer
+                for (temp_swap_buffer) |vertex, i| {
+                    alternate_base_vertex[i] = vertex;
+                }
+
+                const temporary_vertex_count = action.payload.update_vertices.loaded_vertex_count;
+                action.payload.update_vertices.loaded_vertex_count = action.payload.update_vertices.alternate_vertex_count;
+                action.payload.update_vertices.alternate_vertex_count = temporary_vertex_count;
 
                 log.info("Updating vertices", .{});
             },
