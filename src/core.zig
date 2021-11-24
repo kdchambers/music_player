@@ -140,7 +140,7 @@ var texture_indices_buffer: vk.Buffer = undefined;
 var button_faces: []QuadFace(GenericVertex) = undefined;
 
 const help_message =
-    \\zedikor [<options>] [<filename>]
+    \\music_player [<options>] [<filename>]
     \\options:
     \\    --help: display this help message
     \\
@@ -174,10 +174,6 @@ pub fn main() !void {
 
         entry = try iterator.next();
     }
-
-    // const audio_file: [:0]const u8 = "/home/keith/projects/audio_decode/assets/death_note_01.flac";
-
-    // try audio.flac.playFile(allocator, audio_file);
 
     var graphics_context: GraphicsContext = undefined;
     graphics_context.window = try initWindow(config.window_dimensions, config.app_name);
@@ -666,8 +662,6 @@ fn setupApplication(allocator: *Allocator, app: *GraphicsContext) !void {
     _ = ft.FT_Set_Pixel_Sizes(font_face, 0, config.font_size);
 
     // TODO: Hard coded asset path
-    //const large_image = try zigimg.Image.fromFilePath(allocator, "/home/keith/projects/zv_widgets_1/assets/image_1.png");
-    // const initial_second_image = try zigimg.Image.fromFilePath(allocator, "/home/keith/projects/zv_widgets_1/assets/pastal_castle_cropped.png");
     const initial_second_image = try zigimg.Image.fromFilePath(allocator, "/home/keith/projects/zv_widgets_1/assets/warm_spirals_cropped.png");
     defer initial_second_image.deinit();
 
@@ -1296,7 +1290,8 @@ fn handleAudioPlay(allocator: *Allocator, action_payload: ActionPayloadAudioPlay
         log.err("Failed to play music", .{});
     };
 
-    std.time.sleep(50000000);
+    // TODO:
+    std.time.sleep(50000000 * 2);
     assert(audio.output.getState() == .playing);
 }
 
@@ -1331,12 +1326,10 @@ fn handleUpdateVertices(allocator: *Allocator, action_payload: *ActionPayloadVer
         var i: u32 = 0;
         while (i < (largest_range_vertex_count)) : (i += 1) {
             temp_swap_buffer[i] = vertices[loaded_vertex_begin + i];
-            if (i < alternate_vertex_count) {
-                vertices[loaded_vertex_begin + i] = if (i < alternate_vertex_count)
-                    alternate_base_vertex[i]
-                else
-                    null_face[0];
-            }
+            vertices[loaded_vertex_begin + i] = if (i < alternate_vertex_count)
+                alternate_base_vertex[i]
+            else
+                null_face[0];
         }
     }
 
@@ -1363,8 +1356,6 @@ fn handleMouseEvents(x: f64, y: f64, is_pressed_left: bool, is_pressed_right: bo
     }, .{ .is_left_pressed = is_pressed_left, .is_right_pressed = is_pressed_right });
 
     if (triggered_events.count == 0) return;
-
-    log.info("Event triggered..", .{});
 
     // NOTE: Could make self ordering, when an action is matched,
     //       move it to the beginning of the buffer
@@ -1412,6 +1403,11 @@ fn handleMouseEvents(x: f64, y: f64, is_pressed_left: bool, is_pressed_right: bo
                         };
                     }
                 }
+
+                // Set the media icon button to update when clicked
+                if (update_media_icon_action_id_opt) |update_media_icon_action_id| {
+                    system_actions.items[update_media_icon_action_id].action_type = .update_vertices;
+                }
             },
             .audio_pause => {
                 if (audio.output.getState() == .playing) {
@@ -1437,7 +1433,7 @@ fn handleMouseEvents(x: f64, y: f64, is_pressed_left: bool, is_pressed_right: bo
                 defer _ = gpa.deinit();
                 const allocator = &gpa.allocator;
 
-                handleUpdateVertices(allocator, &action.payload.update_vertices) catch |err| {
+                handleUpdateVertices(allocator, &system_actions.items[event_id].payload.update_vertices) catch |err| {
                     log.err("Failed to update vertices for animation", .{});
                 };
             },
@@ -1483,6 +1479,11 @@ const ActionPayloadColorSet = packed struct {
     vertex_range_begin: u8,
     vertex_range_span: u8,
     color_index: u8,
+};
+
+const ActionPayloadSetAction = packed struct {
+    action_type: ActionType,
+    index: u16,
 };
 
 const ActionPayloadVerticesUpdate = packed struct {
@@ -1783,10 +1784,9 @@ fn update(allocator: *Allocator, app: *GraphicsContext) !void {
     const media_button_on_left_click_event_id = event_system.registerMouseLeftPressAction(media_button_paused_extent);
     const media_button_paused_quad_index = @intCast(u16, (@ptrToInt(&media_button_paused_faces[0]) - @ptrToInt(vertices)) / @sizeOf(QuadFace(GenericVertex)));
 
-    // Needs to git into a u10
+    // Needs to fit into a u10
     assert(media_button_paused_quad_index <= std.math.pow(u32, 2, 10));
 
-    // const media_button_on_left_click_action_payload = ActionPayloadVerticesUpdate{
     const media_button_update_icon_action_payload = ActionPayloadVerticesUpdate{
         .loaded_vertex_begin = @intCast(u10, media_button_paused_quad_index),
         .loaded_vertex_count = 1,
@@ -1794,7 +1794,8 @@ fn update(allocator: *Allocator, app: *GraphicsContext) !void {
         .alternate_vertex_count = 2, // Number of faces
     };
 
-    const media_button_update_icon_action = Action{ .action_type = .update_vertices, .payload = .{ .update_vertices = media_button_update_icon_action_payload } };
+    // Action type set to .none so that action is disabled initially
+    const media_button_update_icon_action = Action{ .action_type = .none, .payload = .{ .update_vertices = media_button_update_icon_action_payload } };
     update_media_icon_action_id_opt = system_actions.append(media_button_update_icon_action);
 
     assert(update_media_icon_action_id_opt.? == media_button_on_left_click_event_id);
@@ -1862,13 +1863,79 @@ fn update(allocator: *Allocator, app: *GraphicsContext) !void {
         addicional_vertices += track_item_faces.len;
     }
 
-    vertex_buffer_count += @intCast(u32, media_button_paused_faces.len + proceed_button.len + nice_image.len + addicional_vertices);
+    //
+    // Duration of audio played
+    //
+
+    const audio_progress_label_maximum_charactors = 11;
+    const audio_progress_label_text = "00:00 / 00:00";
+
+    const audio_progress_label_placement = geometry.Coordinates2D(.ndc_right){ .x = -0.9, .y = 0.9 };
+    const audio_progress_text_color = RGBA(f32){ .r = 0.8, .g = 0.8, .b = 0.8, .a = 1.0 };
+
+    const audio_progess_label_faces = try gui.generateText(GenericVertex, face_allocator, audio_progress_label_text, audio_progress_label_placement, scale_factor, glyph_set, audio_progress_text_color, null);
+
+    audio_progress_label_faces_quad_index = calculateQuadIndex(vertices, audio_progess_label_faces);
+
+    vertex_buffer_count += @intCast(u32, audio_progess_label_faces.len + media_button_paused_faces.len + proceed_button.len + nice_image.len + addicional_vertices);
 
     text_buffer_dirty = false;
     is_render_requested = true;
 }
 
+var audio_progress_label_faces_quad_index: u32 = undefined;
 var update_image: bool = false;
+
+fn updateAudioDurationLabel(current_point_seconds: u32, track_duration_seconds: u32, vertices: []GenericVertex) !void {
+    // Wrap our fixed-size buffer in allocator interface to be generic
+    var fixed_buffer_allocator = FixedBufferAllocator{
+        .allocator = .{
+            .allocFn = FixedBufferAllocator.alloc,
+            .resizeFn = FixedBufferAllocator.resize,
+        },
+        .buffer = @ptrCast([*]u8, &vertices[0]),
+        .capacity = @intCast(u32, vertices.len * @sizeOf(GenericVertex)),
+        .used = 0,
+    };
+
+    assert(vertices.len == 11 * 4);
+
+    var face_allocator = &fixed_buffer_allocator.allocator;
+
+    var current_seconds: u32 = current_point_seconds;
+    const current_minutes = blk: {
+        var minutes: u32 = 0;
+        while (current_seconds >= 60) {
+            minutes += 1;
+            current_seconds -= 60;
+        }
+        break :blk minutes;
+    };
+
+    var track_seconds: u32 = track_duration_seconds;
+    const track_minutes = blk: {
+        var minutes: u32 = 0;
+        while (track_seconds >= 60) {
+            minutes += 1;
+            track_seconds -= 60;
+        }
+        break :blk minutes;
+    };
+
+    const scale_factor = geometry.ScaleFactor2D{
+        .horizontal = (2.0 / @intToFloat(f32, screen_dimensions.width)),
+        .vertical = (2.0 / @intToFloat(f32, screen_dimensions.height)),
+    };
+
+    var buffer: [13]u8 = undefined;
+    const audio_progress_label_text = try std.fmt.bufPrint(&buffer, "{d:0>2}:{d:0>2} / {d:0>2}:{d:0>2}", .{ current_minutes, current_seconds, track_minutes, track_seconds });
+    const audio_progress_label_placement = geometry.Coordinates2D(.ndc_right){ .x = -0.9, .y = 0.9 };
+    const audio_progress_text_color = RGBA(f32){ .r = 0.8, .g = 0.8, .b = 0.8, .a = 1.0 };
+
+    _ = try gui.generateText(GenericVertex, face_allocator, audio_progress_label_text, audio_progress_label_placement, scale_factor, glyph_set, audio_progress_text_color, null);
+
+    is_render_requested = true;
+}
 
 fn appLoop(allocator: *Allocator, app: *GraphicsContext) !void {
     const target_fps = 50;
@@ -1878,6 +1945,10 @@ fn appLoop(allocator: *Allocator, app: *GraphicsContext) !void {
 
     var actual_fps: u64 = 0;
     var frames_current_second: u64 = 0;
+
+    // Timestamp in milliseconds since last update of audio duration label
+    var audio_duration_last_update_ts: i64 = std.time.milliTimestamp();
+    const audio_duraction_update_interval_ms: u64 = 1000;
 
     _ = vk.glfwSetCursorPosCallback(app.window, mousePositionCallback);
     _ = vk.glfwSetMouseButtonCallback(app.window, mouseButtonCallback);
@@ -1913,8 +1984,6 @@ fn appLoop(allocator: *Allocator, app: *GraphicsContext) !void {
             try recreateSwapchain(allocator, app);
         }
 
-        const frame_start_ms: i64 = std.time.milliTimestamp();
-
         if (update_image) {
             try swapTexture(app);
             update_image = false;
@@ -1940,12 +2009,28 @@ fn appLoop(allocator: *Allocator, app: *GraphicsContext) !void {
             is_render_requested = false;
         }
 
+        const frame_start_ms: i64 = std.time.milliTimestamp();
+
         const frame_end_ms: i64 = std.time.milliTimestamp();
         const frame_duration_ms = frame_end_ms - frame_start_ms;
+
+        // TODO: I think the loop is running less than 1ms so you should update
+        //       to nanosecond precision
         assert(frame_duration_ms >= 0);
 
         if (frame_duration_ms >= target_ms_per_frame) {
             continue;
+        }
+
+        // Each second update the audio duration
+        if (frame_start_ms >= (audio_duration_last_update_ts + audio_duraction_update_interval_ms)) {
+            const track_length_seconds: u32 = audio.output.trackLengthSeconds() catch 0;
+            const track_played_seconds: u32 = audio.output.secondsPlayed() catch 0;
+
+            const vertices = @ptrCast([*]GenericVertex, @alignCast(16, &mapped_device_memory[vertices_range_index_begin]));
+            const vertices_begin_index: usize = audio_progress_label_faces_quad_index * 4;
+            try updateAudioDurationLabel(track_played_seconds, track_length_seconds, vertices[vertices_begin_index .. vertices_begin_index + (11 * 4)]);
+            audio_duration_last_update_ts = frame_start_ms;
         }
 
         assert(target_ms_per_frame > frame_duration_ms);

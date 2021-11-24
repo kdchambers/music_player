@@ -210,6 +210,7 @@ pub fn calculateRenderedTextDimensions(
     return dimensions;
 }
 
+// TODO: Audit
 pub fn generateText(
     comptime VertexType: type,
     face_allocator: *Allocator,
@@ -220,7 +221,17 @@ pub fn generateText(
     color: RGBA(f32),
     line_height_opt: ?f32,
 ) ![]QuadFace(VertexType) {
-    var vertices = try face_allocator.alloc(QuadFace(VertexType), text_buffer.len);
+    const glyph_length: u32 = blk: {
+        var i: u32 = 0;
+        for (text_buffer) |c| {
+            if (c != ' ' and c != '\n') {
+                i += 1;
+            }
+        }
+        break :blk i;
+    };
+
+    var vertices = try face_allocator.alloc(QuadFace(VertexType), glyph_length);
     var cursor = geometry.Coordinates2D(.carthesian){ .x = 0, .y = 0 };
     var skipped_count: u32 = 0;
     const line_height: f32 = if (line_height_opt != null) line_height_opt.? else 0;
@@ -277,8 +288,7 @@ pub fn generateText(
         cursor.x += 1;
     }
 
-    // Return length not used -- I.e whitespace
-    return try face_allocator.realloc(vertices, vertices.len - skipped_count);
+    return vertices;
 }
 
 pub fn generateLineMargin(comptime VertexType: type, allocator: *Allocator, glyph_set: text.GlyphSet, coordinates: geometry.Coordinates2D(.ndc_right), scale_factor: ScaleFactor2D, line_start: u16, line_count: u16, line_height: f32) ![]QuadFace(VertexType) {

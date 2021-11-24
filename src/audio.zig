@@ -36,6 +36,11 @@ pub const flac = struct {
     }
 };
 
+pub fn lengthOfAudio(size: usize, bits_per_sample: u16, channel_count: u16, playback_rate: u32) u32 {
+    //
+    return @intCast(u32, size / ((bits_per_sample / 8) * channel_count * playback_rate));
+}
+
 pub const output = struct {
     pub const PlaybackState = enum {
         stopped,
@@ -58,6 +63,22 @@ pub const output = struct {
         }
 
         return @intToFloat(f32, audio_length) / @intToFloat(f32, audio_index);
+    }
+
+    pub fn trackLengthSeconds() !u32 {
+        if (playback_state == .stopped) {
+            return error.NoAudioSource;
+        }
+
+        return lengthOfAudio(audio_length, 16, 2, 44100);
+    }
+
+    pub fn secondsPlayed() !u32 {
+        if (playback_state == .stopped) {
+            return error.NoAudioSource;
+        }
+
+        return lengthOfAudio(audio_index, 16, 2, 44100);
     }
 
     pub fn play(audio_buffer: []u8) !void {
@@ -90,6 +111,9 @@ pub const output = struct {
                 return error.InitializeAoFailed;
             }
         }
+
+        const track_length_seconds = lengthOfAudio(audio_buffer.len, 16, 2, 44100);
+        log.info("Track length seconds: {}", .{track_length_seconds});
 
         const segment_size: u32 = 2 * 2 * 44100;
 

@@ -165,27 +165,27 @@ pub fn eventsFromMouseUpdate(comptime max_events: u32, position: geometry.Coordi
             .mouse_hover_enter => {
                 if (is_within_extent) {
                     _ = triggered_events.append(@intCast(u16, event_id));
-                    log.info("Mouse hover enter triggered", .{});
+                    // log.info("Mouse hover enter triggered", .{});
                 }
             },
             .mouse_hover_exit => {
                 if (!is_within_extent) {
                     _ = triggered_events.append(@intCast(u16, event_id));
-                    log.info("Mouse hover exit triggered", .{});
+                    // log.info("Mouse hover exit triggered", .{});
                 }
             },
             .mouse_hover_reflexive_enter => {
                 if (is_within_extent) {
                     _ = triggered_events.append(@intCast(u16, event_id));
                     registered_event.event_type = .mouse_hover_reflexive_exit;
-                    log.info("Reflexive enter triggered", .{});
+                    // log.info("Reflexive enter triggered", .{});
                 }
             },
             .mouse_hover_reflexive_exit => {
                 if (!is_within_extent) {
                     _ = triggered_events.append(@intCast(u16, event_id + 1));
                     registered_event.event_type = .mouse_hover_reflexive_enter;
-                    log.info("Reflexive exit triggered", .{});
+                    // log.info("Reflexive exit triggered", .{});
                 }
             },
             else => {},
