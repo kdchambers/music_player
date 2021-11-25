@@ -12,6 +12,13 @@ const ao = @cImport({
     @cInclude("ao/ao.h");
 });
 
+pub const TrackMetadata = struct {
+    title_length: u32,
+    artist_length: u32,
+    title: [64]u8,
+    artist: [64]u8,
+};
+
 pub const flac = struct {
     pub fn playFile(allocator: *Allocator, file_path: [:0]const u8) !void {
         var metadata_info: libflac.FLAC__StreamMetadata = undefined;
@@ -33,6 +40,64 @@ pub const flac = struct {
         var decoded_audio = try decode(allocator, file_path.ptr);
 
         _ = try std.Thread.spawn(output.play, decoded_audio);
+    }
+
+    pub fn extractTrackMetadata(filename: [:0]const u8) !TrackMetadata {
+        var vorbis_comment_block_opt: ?*libflac.FLAC__StreamMetadata = null;
+        _ = libflac.FLAC__metadata_get_tags(filename, &vorbis_comment_block_opt);
+
+        var track_metadata: TrackMetadata = .{
+            .title_length = 0,
+            .artist_length = 0,
+            .title = [1]u8{0} ** 64,
+            .artist = [1]u8{0} ** 64,
+        };
+
+        if (vorbis_comment_block_opt) |*vorbis_comment_block| {
+            // log.info("Vorbis vender: {s}", .{vorbis_comment_block.*.data.vorbis_comment.vendor_string.entry});
+
+            const vorbis_comments = vorbis_comment_block.*.data.vorbis_comment.comments;
+            const vorbis_comment_count: u32 = vorbis_comment_block.*.data.vorbis_comment.num_comments;
+            var comment_index: u32 = 0;
+
+            while (comment_index < vorbis_comment_count) : (comment_index += 1) {
+                const vorbis_comment = vorbis_comments[comment_index];
+
+                // TODO: Make case insensitive
+                const vorbis_title_tag = "title";
+                const vorbis_artist_tag = "Artist";
+
+                if (std.mem.eql(u8, vorbis_title_tag, vorbis_comment.entry[0..vorbis_title_tag.len])) {
+                    const vorbis_title_tag_preamble: u32 = vorbis_title_tag.len + 1;
+                    assert(vorbis_title_tag_preamble == 6);
+
+                    const entry_length = vorbis_comment.length - vorbis_title_tag_preamble;
+                    track_metadata.title_length = entry_length;
+                    std.mem.copy(u8, track_metadata.title[0..], vorbis_comment.entry[vorbis_title_tag_preamble .. vorbis_title_tag_preamble + entry_length]);
+
+                    continue;
+                }
+
+                if (std.mem.eql(u8, vorbis_artist_tag, vorbis_comment.entry[0..vorbis_artist_tag.len])) {
+                    const vorbis_artist_tag_preamble: u32 = vorbis_artist_tag.len + 1;
+                    assert(vorbis_artist_tag_preamble == 7);
+
+                    const entry_length = vorbis_comment.length - vorbis_artist_tag_preamble;
+                    track_metadata.artist_length = entry_length;
+                    std.mem.copy(u8, track_metadata.artist[0..], vorbis_comment.entry[vorbis_artist_tag_preamble .. vorbis_artist_tag_preamble + entry_length]);
+
+                    continue;
+                }
+
+                // log.info("VORBIS COMMENT: {s}", .{vorbis_comment.entry});
+            }
+
+            defer libflac.FLAC__metadata_object_delete(vorbis_comment_block_opt.?);
+        } else {
+            log.warn("Failed to find vorbis comment", .{});
+        }
+
+        return track_metadata;
     }
 };
 

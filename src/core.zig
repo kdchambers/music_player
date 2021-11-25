@@ -166,8 +166,16 @@ pub fn main() !void {
         const file_name = entry.?.name;
         if (std.mem.eql(u8, file_name[file_name.len - 4 ..], "flac")) {
             const new_name = try allocator.dupeZ(u8, entry.?.name);
-            // const new_name: []u8 = try allocator.alloc(u8, entry.?.name.len + 1);
+
+            const paths: [2][]const u8 = .{ music_dir_path, file_name };
+            const full_path = std.fs.path.joinZ(allocator, paths[0..]) catch null;
+            defer allocator.free(full_path.?);
+
+            // TODO:
+            const track_metadata = try audio.flac.extractTrackMetadata(full_path.?);
+
             log.info("Dir: {s}", .{new_name});
+            _ = track_metadatas.append(track_metadata);
             _ = audio_files.append(new_name);
             audio_file_index += 1;
         }
@@ -389,7 +397,6 @@ fn clean(allocator: *Allocator, app: *GraphicsContext) void {
     allocator.free(app.swapchain_images);
 
     allocator.free(glyph_set.image);
-    allocator.free(second_image.?);
 
     texture_pipeline.deinit(allocator);
     glyph_set.deinit(allocator);
@@ -648,8 +655,6 @@ fn convertImageRgb24(allocator: *Allocator, source_image: []zigimg.color.Rgb24) 
     return new_image;
 }
 
-// TODO:
-var second_image: ?[]RGBA(f32) = null;
 var image_memory_map: [*]u8 = undefined;
 var texture_size_bytes: usize = 0;
 
@@ -664,18 +669,6 @@ fn setupApplication(allocator: *Allocator, app: *GraphicsContext) !void {
     // TODO: Hard coded asset path
     const initial_second_image = try zigimg.Image.fromFilePath(allocator, "/home/keith/projects/zv_widgets_1/assets/warm_spirals_cropped.png");
     defer initial_second_image.deinit();
-
-    second_image = blk: {
-        switch (initial_second_image.pixel_format) {
-            .Rgba32 => break :blk try convertImageRgba32(allocator, initial_second_image.pixels.?.Rgba32),
-            .Rgb24 => break :blk try convertImageRgb24(allocator, initial_second_image.pixels.?.Rgb24),
-            // TODO: Handle this error properly
-            else => unreachable,
-        }
-        unreachable;
-    };
-    // TODO:
-    // defer allocator.free(second_image.?);
 
     // const large_image = try zigimg.Image.fromFilePath(allocator, "/home/keith/projects/zv_widgets_1/assets/warm_spirals_cropped.png");
     const large_image = try zigimg.Image.fromFilePath(allocator, "/home/keith/projects/zv_widgets_1/assets/pastal_castle_cropped.png");
@@ -1269,14 +1262,18 @@ var color_list: FixedBuffer(RGBA(f32), 30) = undefined;
 
 fn customActions(action_id: u16) void {
     if (action_id == 1) {
-        update_image = true;
+        // update_image = true;
     }
 }
 
+var track_metadatas: FixedBuffer(audio.TrackMetadata, 20) = undefined;
 var audio_files: FixedBuffer([:0]const u8, 20) = undefined;
 var update_media_icon_action_id_opt: ?u32 = null;
 
 fn handleAudioPlay(allocator: *Allocator, action_payload: ActionPayloadAudioPlay) !void {
+    if (audio.output.getState() != .stopped) {
+        return error.AudioAlreadyPlaying;
+    }
 
     // TODO: If track is already set, update
     const audio_track_name = audio_files.items[action_payload.id];
@@ -1408,22 +1405,30 @@ fn handleMouseEvents(x: f64, y: f64, is_pressed_left: bool, is_pressed_right: bo
                 if (update_media_icon_action_id_opt) |update_media_icon_action_id| {
                     system_actions.items[update_media_icon_action_id].action_type = .update_vertices;
                 }
+
+                log.info("Audio play", .{});
+                system_actions.items[media_button_toggle_audio_action_id].action_type = .audio_pause;
             },
             .audio_pause => {
+                log.info("Audio paused", .{});
                 if (audio.output.getState() == .playing) {
                     audio.output.pause();
                 }
                 std.time.sleep(10000000);
                 assert(audio.output.getState() == .paused);
-                text_buffer_dirty = true;
+
+                log.info("Audio paused -- ", .{});
+                system_actions.items[media_button_toggle_audio_action_id].action_type = .audio_resume;
             },
             .audio_resume => {
+                log.info("Audio resumed", .{});
                 if (audio.output.getState() == .paused) {
                     audio.output.@"resume"() catch |err| {
                         log.info("Failed to resume audio track", .{});
                     };
                     std.time.sleep(10000000);
                     assert(audio.output.getState() == .playing);
+                    system_actions.items[media_button_toggle_audio_action_id].action_type = .audio_pause;
                     // text_buffer_dirty = true;
                 }
             },
@@ -1440,7 +1445,9 @@ fn handleMouseEvents(x: f64, y: f64, is_pressed_left: bool, is_pressed_right: bo
             .custom => {
                 customActions(action.payload.custom.id);
             },
-            else => {},
+            else => {
+                log.warn("Unmatched event: id {} type {}", .{ event_id, action.action_type });
+            },
         }
     }
 
@@ -1600,6 +1607,9 @@ fn calculateQuadIndex(base: [*]align(16) GenericVertex, widget_faces: []QuadFace
     return @intCast(u16, (@ptrToInt(&widget_faces[0]) - @ptrToInt(base)) / @sizeOf(QuadFace(GenericVertex)));
 }
 
+// TODO: move
+var media_button_toggle_audio_action_id: u32 = undefined;
+
 fn update(allocator: *Allocator, app: *GraphicsContext) !void {
     const vertices = @ptrCast([*]GenericVertex, @alignCast(16, &mapped_device_memory[vertices_range_index_begin]));
 
@@ -1649,7 +1659,7 @@ fn update(allocator: *Allocator, app: *GraphicsContext) !void {
         const button_color = RGBA(f32){ .r = 0.9, .g = 0.5, .b = 0.5, .a = 1.0 };
         const label_color = RGBA(f32){ .r = 0.0, .g = 0.0, .b = 0.0, .a = 1.0 };
 
-        const faces = try gui.button.generate(GenericVertex, face_allocator, glyph_set, "next", button_extent, scale_factor, button_color, label_color);
+        const faces = try gui.button.generate(GenericVertex, face_allocator, glyph_set, "next", button_extent, scale_factor, button_color, label_color, .center);
 
         // Register a mouse_hover event that will change the color of the button
         const on_hover_color = RGBA(f32){ .r = 1.0, .g = 0.0, .b = 0.0, .a = 1.0 };
@@ -1686,33 +1696,6 @@ fn update(allocator: *Allocator, app: *GraphicsContext) !void {
         assert(on_hover_event_ids[1] == system_actions.append(on_hover_exit_action));
 
         break :blk faces;
-    };
-
-    const nice_image = blk: {
-        const dimensions = geometry.Dimensions2D(.pixel){ .width = 100, .height = 50 };
-        const extent = geometry.Extent2D(.ndc_right){
-            .x = 0.0,
-            .y = 0.81,
-            .width = geometry.pixelToNativeDeviceCoordinateRight(dimensions.width, scale_factor.horizontal),
-            .height = geometry.pixelToNativeDeviceCoordinateRight(dimensions.height, scale_factor.vertical),
-        };
-
-        // Register an event handler for on hover
-        const on_hover_event_ids = event_system.registerMouseHoverReflexiveEnterAction(extent);
-
-        const on_hover_enter_action_payload = ActionPayloadCustom{
-            .id = 1,
-            .dummy = 0,
-        };
-
-        const on_hover_enter_action = Action{ .action_type = .custom, .payload = .{ .custom = on_hover_enter_action_payload } };
-
-        log.info("Event ids for image: {d} {d}", .{ on_hover_event_ids[0], on_hover_event_ids[1] });
-
-        assert(on_hover_event_ids[0] == system_actions.append(on_hover_enter_action));
-        assert(on_hover_event_ids[1] == system_actions.append(on_hover_enter_action)); // Dummy
-
-        break :blk try gui.image.generate(GenericVertex, face_allocator, 2.0, extent);
     };
 
     //
@@ -1761,20 +1744,19 @@ fn update(allocator: *Allocator, app: *GraphicsContext) !void {
     //
 
     assert(audio.output.getState() != .playing);
-    log.info("Generating play button", .{});
 
     // NOTE: Even though we only need one face to generate a triangle,
     //       we need to reserve a second for the resumed icon
     var media_button_paused_faces = try face_allocator.alloc(QuadFace(GenericVertex), 2);
 
     {
-        const media_button_on_left_click_event_id = event_system.registerMouseLeftPressAction(media_button_paused_extent);
-        const media_button_resume_audio_action_payload = ActionPayloadAudioResume{
-            .dummy = 0,
-        };
+        // const media_button_on_left_click_event_id = event_system.registerMouseLeftPressAction(media_button_paused_extent);
+        // const media_button_resume_audio_action_payload = ActionPayloadAudioResume{
+        // .dummy = 0,
+        // };
 
-        const media_button_resume_audio_action = Action{ .action_type = .audio_resume, .payload = .{ .audio_resume = media_button_resume_audio_action_payload } };
-        assert(media_button_on_left_click_event_id == system_actions.append(media_button_resume_audio_action));
+        // const media_button_resume_audio_action = Action{ .action_type = .audio_resume, .payload = .{ .audio_resume = media_button_resume_audio_action_payload } };
+        // assert(media_button_on_left_click_event_id == system_actions.append(media_button_resume_audio_action));
     }
 
     media_button_paused_faces[0] = graphics.generateTriangleColored(GenericVertex, media_button_paused_extent, media_button_color);
@@ -1800,9 +1782,25 @@ fn update(allocator: *Allocator, app: *GraphicsContext) !void {
 
     assert(update_media_icon_action_id_opt.? == media_button_on_left_click_event_id);
 
+    // Setup a Pause Action
+
+    // TODO: Change extent
+    const media_button_on_left_click_event_id_2 = event_system.registerMouseLeftPressAction(media_button_paused_extent);
+
+    const media_button_audio_pause_action_payload = ActionPayloadAudioPause{
+        .dummy = 0,
+    };
+
+    const media_button_audio_pause_action = Action{ .action_type = .none, .payload = .{ .audio_pause = media_button_audio_pause_action_payload } };
+    assert(media_button_on_left_click_event_id_2 == system_actions.append(media_button_audio_pause_action));
+
+    media_button_toggle_audio_action_id = media_button_on_left_click_event_id_2;
+
     // TODO:
     var addicional_vertices: usize = 0;
-    for (audio_files.items[0..audio_files.count]) |track_name, track_index| {
+    for (track_metadatas.items[0..track_metadatas.count]) |track_metadata, track_index| {
+        const track_name = track_metadata.title[0..track_metadata.title_length];
+
         const track_item_placement = geometry.Coordinates2D(.ndc_right){ .x = -0.8, .y = -0.8 + (@intToFloat(f32, track_index) * 0.075) };
         const track_item_dimensions = geometry.Dimensions2D(.pixel){ .width = 600, .height = 30 };
 
@@ -1816,7 +1814,7 @@ fn update(allocator: *Allocator, app: *GraphicsContext) !void {
         const track_item_background_color = RGBA(f32){ .r = 0.9, .g = 0.5, .b = 0.5, .a = 1.0 };
         const track_item_label_color = RGBA(f32){ .r = 0.0, .g = 0.0, .b = 0.0, .a = 1.0 };
 
-        const track_item_faces = try gui.button.generate(GenericVertex, face_allocator, glyph_set, track_name, track_item_extent, scale_factor, track_item_background_color, track_item_label_color);
+        const track_item_faces = try gui.button.generate(GenericVertex, face_allocator, glyph_set, track_name, track_item_extent, scale_factor, track_item_background_color, track_item_label_color, .left);
 
         const track_item_on_left_click_event_id = event_system.registerMouseLeftPressAction(track_item_extent);
 
@@ -1877,14 +1875,13 @@ fn update(allocator: *Allocator, app: *GraphicsContext) !void {
 
     audio_progress_label_faces_quad_index = calculateQuadIndex(vertices, audio_progess_label_faces);
 
-    vertex_buffer_count += @intCast(u32, audio_progess_label_faces.len + media_button_paused_faces.len + proceed_button.len + nice_image.len + addicional_vertices);
+    vertex_buffer_count += @intCast(u32, audio_progess_label_faces.len + media_button_paused_faces.len + proceed_button.len + addicional_vertices);
 
     text_buffer_dirty = false;
     is_render_requested = true;
 }
 
 var audio_progress_label_faces_quad_index: u32 = undefined;
-var update_image: bool = false;
 
 fn updateAudioDurationLabel(current_point_seconds: u32, track_duration_seconds: u32, vertices: []GenericVertex) !void {
     // Wrap our fixed-size buffer in allocator interface to be generic
@@ -1982,11 +1979,6 @@ fn appLoop(allocator: *Allocator, app: *GraphicsContext) !void {
             text_buffer_dirty = true;
             framebuffer_resized = false;
             try recreateSwapchain(allocator, app);
-        }
-
-        if (update_image) {
-            try swapTexture(app);
-            update_image = false;
         }
 
         if (text_buffer_dirty) {

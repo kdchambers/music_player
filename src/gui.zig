@@ -39,10 +39,13 @@ pub const Context = struct {
     vertices_count: u32,
 };
 
+pub const Alignment = enum { left, right, center };
+
 pub const button = struct {
     pub const face_count: u32 = 1;
 
     // TODO: Support eliding if button dimensions are too small for label
+    // TODO: Don't hardcode non-center alignment, maybe split function
     pub fn generate(
         comptime VertexType: type,
         allocator: *Allocator,
@@ -52,7 +55,12 @@ pub const button = struct {
         scale_factor: ScaleFactor2D,
         color: RGBA(f32),
         label_color: RGBA(f32),
+        text_alignment: Alignment,
     ) ![]QuadFace(VertexType) {
+
+        // TODO: Implement right align
+        assert(text_alignment != .right);
+
         var background_face: *QuadFace(VertexType) = try allocator.create(QuadFace(VertexType));
 
         // Background has to be generated first so that it doesn't cover the label text
@@ -62,7 +70,15 @@ pub const button = struct {
         const space_width = 10.0 * scale_factor.horizontal;
         const label_dimensions = try calculateRenderedTextDimensions(label, glyph_set, scale_factor, line_height, space_width);
 
-        const horizontal_margin = (extent.width - label_dimensions.width) / 2;
+        const horizontal_margin = blk: {
+            switch (text_alignment) {
+                .left => break :blk 0.01,
+                .center => break :blk (extent.width - label_dimensions.width) / 2,
+                .right => unreachable,
+            }
+            unreachable;
+        };
+
         const vertical_margin = (extent.height - label_dimensions.height) / 2;
 
         const label_origin = geometry.Coordinates2D(.ndc_right){
