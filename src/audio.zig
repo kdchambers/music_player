@@ -3,6 +3,10 @@ const assert = std.debug.assert;
 const log = std.log;
 const Allocator = std.mem.Allocator;
 
+const mad = @cImport({
+    @cInclude("mad.h");
+});
+
 const libflac = @cImport({
     @cInclude("FLAC/stream_decoder.h");
     @cInclude("FLAC/metadata.h");
@@ -19,8 +23,127 @@ pub const TrackMetadata = struct {
     artist: [64]u8,
 };
 
+pub const mp3 = struct {
+    fn errorCallback(data: ?*c_void, stream: [*c]mad.mad_stream, frame: [*c]mad.mad_frame) callconv(.C) mad.mad_flow {
+        // log.err("Failure in mp3 decoding", .{});
+        log.err("Failure in mp3 decoding '{s}'", .{mad.mad_stream_errorstr(stream)});
+        return @intToEnum(mad.enum_mad_flow, mad.MAD_FLOW_CONTINUE);
+    }
+
+    fn scale(sample: mad.mad_fixed_t) i16 {
+        const MAD_F_ONE = 0x10000000;
+
+        // round
+        var new_sample = sample + (1 << (mad.MAD_F_FRACBITS - 16));
+
+        // clip
+        if (new_sample >= MAD_F_ONE) {
+            new_sample = MAD_F_ONE - 1;
+        } else if (new_sample < -MAD_F_ONE) {
+            new_sample = -MAD_F_ONE;
+        }
+
+        // quantize
+        return @truncate(i16, new_sample >> (mad.MAD_F_FRACBITS + 1 - 16));
+    }
+
+    fn outputCallback(data: ?*c_void, header: [*c]const mad.mad_header, pcm: [*c]mad.mad_pcm) callconv(.C) mad.mad_flow {
+        // log.info("Called output callback", .{});
+
+        const channels_count: u32 = pcm.*.channels;
+        const samples_count: u32 = pcm.*.length;
+        var channel_left: [*]const mad.mad_fixed_t = @ptrCast([*]const mad.mad_fixed_t, &pcm.*.samples[0][0]);
+        var channel_right: [*]const mad.mad_fixed_t = @ptrCast([*]const mad.mad_fixed_t, &pcm.*.samples[1][0]);
+
+        assert(channels_count == 2);
+        assert(pcm.*.samplerate == 44100);
+
+        var output_buffer = &decoded_mp3_buffer;
+
+        var sample_index: u32 = 0;
+        while (sample_index < samples_count) : (sample_index += 1) {
+            const left_block = @bitCast(u16, scale(channel_left[sample_index]));
+
+            //
+            // Note: Write to buffer in little endian format
+            //
+
+            output_buffer.*.buffer[output_buffer.position] = @truncate(u8, left_block);
+            output_buffer.*.buffer[output_buffer.position + 1] = @truncate(u8, left_block >> 8);
+
+            const right_block = @bitCast(u16, scale(channel_right[sample_index]));
+
+            output_buffer.*.buffer[output_buffer.position + 2] = @truncate(u8, right_block);
+            output_buffer.*.buffer[output_buffer.position + 3] = @truncate(u8, right_block >> 8);
+
+            output_buffer.position += 4;
+        }
+
+        return @intToEnum(mad.enum_mad_flow, mad.MAD_FLOW_CONTINUE);
+    }
+
+    var decoded_mp3_buffer: OutputBuffer = undefined;
+
+    fn decode(input_buffer: *[]const u8) i32 {
+        var decoder: mad.mad_decoder = undefined;
+        mad.mad_decoder_init(&decoder, @ptrCast(*c_void, input_buffer), inputCallback, null, null, outputCallback, errorCallback, null);
+        var result = mad.mad_decoder_run(&decoder, @intToEnum(mad.enum_mad_decoder_mode, mad.MAD_DECODER_MODE_SYNC));
+        _ = mad.mad_decoder_finish(&decoder);
+        return result;
+    }
+
+    var is_decoded = false;
+
+    fn inputCallback(data: ?*c_void, stream: [*c]mad.mad_stream) callconv(.C) mad.mad_flow {
+        var input_buffer: *[]u8 = @ptrCast(*[]u8, @alignCast(8, data.?));
+
+        if (is_decoded == true) {
+            return @intToEnum(mad.enum_mad_flow, mad.MAD_FLOW_STOP);
+        }
+
+        log.info("Running input callback", .{});
+
+        const size: usize = if (is_decoded) 0 else input_buffer.len;
+        mad.mad_stream_buffer(stream, input_buffer.ptr, size);
+
+        is_decoded = true;
+
+        return @intToEnum(mad.enum_mad_flow, mad.MAD_FLOW_CONTINUE);
+    }
+
+    pub fn playFile(allocator: *Allocator, file_path: [:0]const u8) !void {
+        const file = try std.fs.openFileAbsolute(file_path, .{ .read = true });
+
+        const file_stat = try file.stat();
+        const file_size = file_stat.size;
+
+        var input_buffer = try allocator.alloc(u8, file_size);
+        const bytes_read = try file.readAll(input_buffer);
+
+        if (bytes_read != file_size) {
+            log.err("Read {} of total {} bytes", .{ bytes_read, file_size });
+            return error.ReadFileFailed;
+        }
+
+        decoded_mp3_buffer.position = 0;
+
+        // TODO(keith): Read id tags to determine uncompressed length
+        decoded_mp3_buffer.buffer = try allocator.alloc(u8, input_buffer.len * 5);
+
+        _ = decode(&input_buffer);
+
+        _ = try std.Thread.spawn(output.play, decoded_mp3_buffer.buffer);
+    }
+};
+
 pub const flac = struct {
     pub fn playFile(allocator: *Allocator, file_path: [:0]const u8) !void {
+        if (output.playback_state != .stopped) {
+            output.playback_state = .stopped;
+        }
+
+        std.time.sleep(std.time.ns_per_ms * 250);
+
         var metadata_info: libflac.FLAC__StreamMetadata = undefined;
         const result = libflac.FLAC__metadata_get_streaminfo(file_path.ptr, &metadata_info);
         const metadata_type: libflac.FLAC__MetadataType = metadata_info.@"type";
@@ -102,7 +225,6 @@ pub const flac = struct {
 };
 
 pub fn lengthOfAudio(size: usize, bits_per_sample: u16, channel_count: u16, playback_rate: u32) u32 {
-    //
     return @intCast(u32, size / ((bits_per_sample / 8) * channel_count * playback_rate));
 }
 
@@ -151,6 +273,7 @@ pub const output = struct {
             return error.AlreadyPlayingAudio;
         }
 
+        audio_index = 0;
         audio_length = @intCast(u32, audio_buffer.len);
 
         if (device == null) {
@@ -185,6 +308,10 @@ pub const output = struct {
         playback_state = .playing;
 
         while (audio_index < audio_buffer.len and playback_state != .stopped) {
+
+            // Stop playback if state has been changed to .stopped
+            if (playback_state == .stopped) break;
+
             if (playback_state == .paused) {
                 std.time.sleep(100000 * 1000);
                 continue;

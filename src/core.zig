@@ -149,6 +149,8 @@ const help_message =
 var music_dir: std.fs.Dir = undefined;
 const music_dir_path = "/mnt/data/media/music/Kaytranada/";
 
+const media_library_directory: std.fs.Dir = undefined;
+
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
@@ -1271,9 +1273,6 @@ var audio_files: FixedBuffer([:0]const u8, 20) = undefined;
 var update_media_icon_action_id_opt: ?u32 = null;
 
 fn handleAudioPlay(allocator: *Allocator, action_payload: ActionPayloadAudioPlay) !void {
-    if (audio.output.getState() != .stopped) {
-        return error.AudioAlreadyPlaying;
-    }
 
     // TODO: If track is already set, update
     const audio_track_name = audio_files.items[action_payload.id];
@@ -1646,8 +1645,8 @@ fn update(allocator: *Allocator, app: *GraphicsContext) !void {
     inactive_vertices_attachments.clear();
 
     const proceed_button = blk: {
-        const button_placement = geometry.Coordinates2D(.ndc_right){ .x = -0.81, .y = 0.81 };
-        const button_dimensions = geometry.Dimensions2D(.pixel){ .width = 100, .height = 50 };
+        const button_placement = geometry.Coordinates2D(.ndc_right){ .x = -0.95, .y = -0.92 };
+        const button_dimensions = geometry.Dimensions2D(.pixel){ .width = 50, .height = 25 };
 
         const button_extent = geometry.Extent2D(.ndc_right){
             .x = button_placement.x,
@@ -1659,7 +1658,7 @@ fn update(allocator: *Allocator, app: *GraphicsContext) !void {
         const button_color = RGBA(f32){ .r = 0.9, .g = 0.5, .b = 0.5, .a = 1.0 };
         const label_color = RGBA(f32){ .r = 0.0, .g = 0.0, .b = 0.0, .a = 1.0 };
 
-        const faces = try gui.button.generate(GenericVertex, face_allocator, glyph_set, "next", button_extent, scale_factor, button_color, label_color, .center);
+        const faces = try gui.button.generate(GenericVertex, face_allocator, glyph_set, "<-", button_extent, scale_factor, button_color, label_color, .center);
 
         // Register a mouse_hover event that will change the color of the button
         const on_hover_color = RGBA(f32){ .r = 1.0, .g = 0.0, .b = 0.0, .a = 1.0 };

@@ -20,6 +20,8 @@ pub fn build(b: *Builder) void {
     exe.addIncludeDir("/usr/include/freetype2");
     exe.addIncludeDir("/usr/local/include");
 
+    exe.addIncludeDir("external/libmad");
+
     exe.addPackagePath("vulkan", "external/vulkan/vulkan.zig");
 
     exe.addPackagePath("geometry", "src/geometry.zig");
@@ -37,6 +39,7 @@ pub fn build(b: *Builder) void {
     exe.linkSystemLibrary("freetype");
     exe.linkSystemLibrary("c");
     exe.linkSystemLibrary("FLAC");
+    exe.linkSystemLibrary("mad");
 
     exe.install();
 
