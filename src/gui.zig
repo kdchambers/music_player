@@ -208,7 +208,9 @@ pub fn calculateRenderedTextDimensions(
                         break :blk x;
                     }
                 }
-                return error.CharacterNotInSet;
+                log.err("Charactor not in set '{c}' '{s}'", .{ char, text_buffer });
+                continue;
+                // return error.CharacterNotInSet;
             };
 
             dimensions.width += (@intToFloat(f32, glyph_set.glyph_information[glyph_index].advance) / 64.0) * scale_factor.horizontal;
@@ -273,7 +275,9 @@ pub fn generateText(
                         break :blk x;
                     }
                 }
-                return error.CharacterNotInSet;
+                log.err("Charactor not in set '{c}' '{s}'", .{ char, text_buffer });
+                continue;
+                // return error.CharacterNotInSet;
             };
 
             const x_increment = (@intToFloat(f32, glyph_set.glyph_information[glyph_index].advance) / 64.0) * scale_factor.horizontal;

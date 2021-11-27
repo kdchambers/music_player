@@ -40,17 +40,15 @@ pub const mp3 = struct {
         if (tag_opt) |tag| {
             const artist_frame = id3v2.tag_get_artist(tag);
             const artist_content = id3v2.parse_text_frame_content(artist_frame);
-            const artist_content_length = @intCast(u32, artist_content.*.size);
 
-            std.mem.copy(u8, result.artist[0..], artist_content.*.data[0..artist_content_length]);
-            result.artist_length = @intCast(u32, artist_content_length);
+            result.artist_length = @intCast(u32, artist_content.*.size);
+            std.mem.copy(u8, result.artist[0..], artist_content.*.data[0..result.artist_length]);
 
             const title_frame = id3v2.tag_get_title(tag);
             const title_content = id3v2.parse_text_frame_content(title_frame);
-            const title_content_length = @intCast(u32, title_content.*.size);
 
-            std.mem.copy(u8, result.title[0..], title_content.*.data[0..title_content_length]);
-            result.title_length = @intCast(u32, title_content_length);
+            result.title_length = @intCast(u32, title_content.*.size);
+            std.mem.copy(u8, result.title[0..], title_content.*.data[0..result.title_length]);
         } else {
             std.mem.copy(u8, result.artist[0..], "Unknown");
             result.artist_length = 7;
@@ -158,8 +156,8 @@ pub const mp3 = struct {
 
         decoded_mp3_buffer.position = 0;
 
-        // TODO(keith): Read id tags to determine uncompressed length
-        decoded_mp3_buffer.buffer = try allocator.alloc(u8, input_buffer.len * 5);
+        // TODO(keith): I believe you have to read the frames to get the real size
+        decoded_mp3_buffer.buffer = try allocator.alloc(u8, input_buffer.len * 10);
 
         _ = decode(&input_buffer);
 

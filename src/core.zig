@@ -235,7 +235,12 @@ pub fn main() !void {
         while (entry != null and audio_files.count < 10) {
             if (audio_file_index >= max_audio_files) break;
             const file_name = entry.?.name;
-            if (std.mem.eql(u8, file_name[file_name.len - 4 ..], "flac")) {
+            var extension_label: []u8 = try allocator.dupe(u8, file_name[file_name.len - 4 ..]);
+            defer allocator.free(extension_label);
+
+            toUpper(&extension_label);
+
+            if (std.mem.eql(u8, extension_label, "FLAC")) {
                 const new_name = try allocator.dupeZ(u8, entry.?.name);
 
                 const paths: [2][]const u8 = .{ music_dir_path, file_name };
@@ -278,10 +283,13 @@ pub fn main() !void {
             var media_item: MediaItem = undefined;
             media_item.kind = blk: {
                 if (item_name.len > 4) {
-                    const possible_extension_name = item_name[item_name.len - 4 ..];
-                    if (std.mem.eql(u8, possible_extension_name, "flac")) {
+                    var extension_label: []u8 = try allocator.dupe(u8, item_name[item_name.len - 4 ..]);
+                    defer allocator.free(extension_label);
+                    toUpper(&extension_label);
+
+                    if (std.mem.eql(u8, extension_label, "FLAC")) {
                         break :blk .flac;
-                    } else if (std.mem.eql(u8, possible_extension_name, ".mp3")) {
+                    } else if (std.mem.eql(u8, extension_label, ".MP3")) {
                         break :blk .mp3;
                     } else {
                         break :blk .directory;
@@ -1386,13 +1394,20 @@ var track_metadatas: FixedBuffer(audio.TrackMetadata, 20) = undefined;
 var audio_files: FixedBuffer([:0]const u8, 20) = undefined;
 var update_media_icon_action_id_opt: ?u32 = null;
 
+fn toUpper(string: *[]u8) void {
+    for (string.*) |*char| {
+        char.* = std.ascii.toUpper(char.*);
+    }
+}
+
 fn handleAudioPlay(allocator: *Allocator, action_payload: ActionPayloadAudioPlay) !void {
 
     // TODO: If track is already set, update
     const audio_track_name = audio_files.items[action_payload.id];
     log.info("Playing track {s}", .{audio_track_name});
 
-    var current_path_buffer: [64]u8 = undefined;
+    // TODO: Don't hardcode, or put in a definition
+    var current_path_buffer: [128]u8 = undefined;
     const current_path = current_directory.realpath(".", current_path_buffer[0..]) catch |err| {
         unreachable;
     };
@@ -1608,10 +1623,15 @@ fn handleMouseEvents(x: f64, y: f64, is_pressed_left: bool, is_pressed_right: bo
                         }
 
                         if (item_name.len > 4) {
-                            const possible_extension_name = item_name[item_name.len - 4 ..];
-                            if (std.mem.eql(u8, possible_extension_name, "flac")) {
+                            var extension_label = std.mem.dupe(allocator, u8, item_name[item_name.len - 4 ..]) catch |err| {
+                                unreachable;
+                            };
+                            defer allocator.free(extension_label);
+                            toUpper(&extension_label);
+
+                            if (std.mem.eql(u8, extension_label, "FLAC")) {
                                 break :blk .flac;
-                            } else if (std.mem.eql(u8, possible_extension_name, ".mp3")) {
+                            } else if (std.mem.eql(u8, extension_label, ".MP3")) {
                                 break :blk .mp3;
                             } else {
                                 break :blk .unknown;
@@ -1632,7 +1652,7 @@ fn handleMouseEvents(x: f64, y: f64, is_pressed_left: bool, is_pressed_right: bo
                                 unreachable;
                             };
 
-                            var current_path_buffer: [64]u8 = undefined;
+                            var current_path_buffer: [128]u8 = undefined;
                             const current_path = current_directory.realpath(".", current_path_buffer[0..]) catch |err| {
                                 unreachable;
                             };
@@ -2005,7 +2025,8 @@ fn update(allocator: *Allocator, app: *GraphicsContext) !void {
     // Generate our Media (pause / resume) button
     //
 
-    assert(audio.output.getState() != .playing);
+    // TODO: Generate a different version if audio is playing
+    // assert(audio.output.getState() != .playing);
 
     // NOTE: Even though we only need one face to generate a triangle,
     //       we need to reserve a second for the resumed icon
@@ -2060,7 +2081,7 @@ fn update(allocator: *Allocator, app: *GraphicsContext) !void {
 
     const is_tracks: bool = blk: {
         for (loaded_media_items.toSlice()) |media_item| {
-            if (media_item.kind == .mp3) break :blk true;
+            if (media_item.kind == .mp3 or media_item.kind == .flac) break :blk true;
         }
         break :blk false;
     };
@@ -2109,7 +2130,7 @@ fn update(allocator: *Allocator, app: *GraphicsContext) !void {
         for (track_metadatas.items[0..track_metadatas.count]) |track_metadata, track_index| {
             const track_name = track_metadata.title[0..track_metadata.title_length];
 
-            log.info("Track name: {s}", .{track_name});
+            log.info("Track name: '{s}'", .{track_name});
             assert(track_name.len > 0);
 
             const track_item_placement = geometry.Coordinates2D(.ndc_right){ .x = -0.8, .y = -0.8 + (@intToFloat(f32, track_index) * 0.075) };
