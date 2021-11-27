@@ -33,6 +33,7 @@ pub fn build(b: *Builder) void {
 
     exe.addLibPath("/usr/local/lib");
 
+    exe.linkSystemLibrary("id3v2");
     exe.linkSystemLibrary("vulkan");
     exe.linkSystemLibrary("ao");
     exe.linkSystemLibrary("glfw");

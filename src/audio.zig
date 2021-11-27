@@ -16,6 +16,10 @@ const ao = @cImport({
     @cInclude("ao/ao.h");
 });
 
+const id3v2 = @cImport({
+    @cInclude("id3v2lib.h");
+});
+
 pub const TrackMetadata = struct {
     title_length: u32,
     artist_length: u32,
@@ -25,11 +29,38 @@ pub const TrackMetadata = struct {
 
 pub const mp3 = struct {
     fn errorCallback(data: ?*c_void, stream: [*c]mad.mad_stream, frame: [*c]mad.mad_frame) callconv(.C) mad.mad_flow {
-        // log.err("Failure in mp3 decoding", .{});
         log.err("Failure in mp3 decoding '{s}'", .{mad.mad_stream_errorstr(stream)});
         return @intToEnum(mad.enum_mad_flow, mad.MAD_FLOW_CONTINUE);
     }
 
+    pub fn extractTrackMetadata(filename: [:0]const u8) !TrackMetadata {
+        var result: TrackMetadata = undefined;
+
+        const tag_opt: [*c]id3v2.ID3v2_tag = id3v2.load_tag(filename);
+        if (tag_opt) |tag| {
+            const artist_frame = id3v2.tag_get_artist(tag);
+            const artist_content = id3v2.parse_text_frame_content(artist_frame);
+            const artist_content_length = @intCast(u32, artist_content.*.size);
+
+            std.mem.copy(u8, result.artist[0..], artist_content.*.data[0..artist_content_length]);
+            result.artist_length = @intCast(u32, artist_content_length);
+
+            const title_frame = id3v2.tag_get_title(tag);
+            const title_content = id3v2.parse_text_frame_content(title_frame);
+            const title_content_length = @intCast(u32, title_content.*.size);
+
+            std.mem.copy(u8, result.title[0..], title_content.*.data[0..title_content_length]);
+            result.title_length = @intCast(u32, title_content_length);
+        } else {
+            std.mem.copy(u8, result.artist[0..], "Unknown");
+            result.artist_length = 7;
+
+            std.mem.copy(u8, result.title[0..], "Unknown");
+            result.title_length = 7;
+        }
+
+        return result;
+    }
     fn scale(sample: mad.mad_fixed_t) i16 {
         const MAD_F_ONE = 0x10000000;
 

@@ -149,7 +149,73 @@ const help_message =
 var music_dir: std.fs.Dir = undefined;
 const music_dir_path = "/mnt/data/media/music/Kaytranada/";
 
-const media_library_directory: std.fs.Dir = undefined;
+const MediaItemKind = enum {
+    mp3,
+    flac,
+    directory,
+    unknown,
+};
+
+fn StackString(comptime divider: u8, comptime buffer_size: u32) type {
+    return struct {
+        const This = @This();
+
+        used: u32,
+        buffer: [buffer_size]u8,
+
+        fn push(self: *This, string: []const u8) !void {
+            if ((string.len + self.used + 1) > buffer_size) {
+                return error.InsuffienceSpace;
+            }
+
+            self.buffer[self.used] = divider;
+            std.mem.copy(u8, self.buffer[self.used + 1], string);
+        }
+
+        fn pop(self: *This) void {
+            var i = self.used - 1;
+            while (i > 0) {
+                if (self.buffer[i] == divider) {
+                    self.used = i;
+                }
+            }
+        }
+    };
+}
+
+fn StringBuffer(comptime size: u32) type {
+    return struct {
+        const This = @This();
+
+        fn toSlice(self: *This) []u8 {
+            return self.bytes[0..self.count];
+        }
+
+        fn fromSlice(self: *This, slice: []const u8) !void {
+            if (slice.len > (size - 1)) {
+                return error.InsuffienceSpace;
+            }
+
+            std.mem.copy(u8, self.bytes[0..], slice[0..]);
+            self.bytes[slice.len] = 0; // Null terminate
+
+            self.count = @intCast(u32, slice.len);
+        }
+
+        count: u32,
+        bytes: [size]u8,
+    };
+}
+
+const MediaItem = struct {
+    kind: MediaItemKind,
+    name: StringBuffer(60),
+};
+
+// TODO: You can define this with a env variable
+const library_root_path = "/mnt/data/media/music";
+var loaded_media_items: FixedBuffer(MediaItem, 32) = .{ .count = 0 };
+var current_directory: std.fs.Dir = undefined;
 
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
@@ -158,31 +224,79 @@ pub fn main() !void {
 
     // Let's read all the files in a directory
     music_dir = try std.fs.openDirAbsolute(music_dir_path, .{ .iterate = true });
-    var iterator = music_dir.iterate();
-    var entry = try iterator.next();
 
     const max_audio_files: u32 = 10;
     var audio_file_index: u32 = 0;
-    while (entry != null and audio_files.count < 10) {
-        if (audio_file_index >= max_audio_files) break;
-        const file_name = entry.?.name;
-        if (std.mem.eql(u8, file_name[file_name.len - 4 ..], "flac")) {
-            const new_name = try allocator.dupeZ(u8, entry.?.name);
 
-            const paths: [2][]const u8 = .{ music_dir_path, file_name };
-            const full_path = std.fs.path.joinZ(allocator, paths[0..]) catch null;
-            defer allocator.free(full_path.?);
+    {
+        var iterator = music_dir.iterate();
+        var entry = try iterator.next();
 
-            // TODO:
-            const track_metadata = try audio.flac.extractTrackMetadata(full_path.?);
+        while (entry != null and audio_files.count < 10) {
+            if (audio_file_index >= max_audio_files) break;
+            const file_name = entry.?.name;
+            if (std.mem.eql(u8, file_name[file_name.len - 4 ..], "flac")) {
+                const new_name = try allocator.dupeZ(u8, entry.?.name);
 
-            log.info("Dir: {s}", .{new_name});
-            _ = track_metadatas.append(track_metadata);
-            _ = audio_files.append(new_name);
-            audio_file_index += 1;
+                const paths: [2][]const u8 = .{ music_dir_path, file_name };
+                const full_path = std.fs.path.joinZ(allocator, paths[0..]) catch null;
+                defer allocator.free(full_path.?);
+
+                // TODO:
+                const track_metadata = try audio.flac.extractTrackMetadata(full_path.?);
+
+                log.info("Dir: {s}", .{new_name});
+                _ = track_metadatas.append(track_metadata);
+                _ = audio_files.append(new_name);
+                audio_file_index += 1;
+            }
+
+            entry = try iterator.next();
         }
+    }
 
-        entry = try iterator.next();
+    //
+    // Load all media items in the library root directory
+    //
+
+    {
+        current_directory = try std.fs.openDirAbsolute(library_root_path, .{ .iterate = true });
+
+        const max_media_items: u32 = 10;
+
+        var iterator = current_directory.iterate();
+        var entry = try iterator.next();
+
+        var i: u32 = 0;
+        while (entry != null and loaded_media_items.count < max_media_items) {
+            if (i == max_media_items) break;
+
+            i += 1;
+
+            const item_name = entry.?.name;
+
+            var media_item: MediaItem = undefined;
+            media_item.kind = blk: {
+                if (item_name.len > 4) {
+                    const possible_extension_name = item_name[item_name.len - 4 ..];
+                    if (std.mem.eql(u8, possible_extension_name, "flac")) {
+                        break :blk .flac;
+                    } else if (std.mem.eql(u8, possible_extension_name, ".mp3")) {
+                        break :blk .mp3;
+                    } else {
+                        break :blk .directory;
+                    }
+                } else {
+                    break :blk .directory;
+                }
+            };
+
+            try media_item.name.fromSlice(item_name);
+            _ = loaded_media_items.append(media_item);
+
+            log.info("Media item: '{s}' {s}", .{ media_item.name.toSlice(), media_item.kind });
+            entry = try iterator.next();
+        }
     }
 
     var graphics_context: GraphicsContext = undefined;
@@ -1278,16 +1392,38 @@ fn handleAudioPlay(allocator: *Allocator, action_payload: ActionPayloadAudioPlay
     const audio_track_name = audio_files.items[action_payload.id];
     log.info("Playing track {s}", .{audio_track_name});
 
-    const paths: [2][]const u8 = .{ music_dir_path, audio_track_name };
+    var current_path_buffer: [64]u8 = undefined;
+    const current_path = current_directory.realpath(".", current_path_buffer[0..]) catch |err| {
+        unreachable;
+    };
+
+    const paths: [2][]const u8 = .{ current_path, audio_track_name };
     const full_path = std.fs.path.joinZ(allocator, paths[0..]) catch null;
     defer allocator.free(full_path.?);
 
-    audio.flac.playFile(allocator, full_path.?) catch |err| {
-        log.err("Failed to play music", .{});
-    };
+    const kind = loaded_media_items.items[action_payload.id].kind;
+
+    log.info("Playing track {s}", .{loaded_media_items.items[action_payload.id].name.toSlice()});
+    log.info("Playing path {s}", .{full_path});
+
+    switch (kind) {
+        .mp3 => {
+            audio.mp3.playFile(allocator, full_path.?) catch |err| {
+                log.err("Failed to play music", .{});
+            };
+        },
+        .flac => {
+            audio.flac.playFile(allocator, full_path.?) catch |err| {
+                log.err("Failed to play music", .{});
+            };
+        },
+        else => {
+            unreachable;
+        },
+    }
 
     // TODO:
-    std.time.sleep(50000000 * 2);
+    std.time.sleep(std.time.ns_per_s * 1);
     assert(audio.output.getState() == .playing);
 }
 
@@ -1431,6 +1567,109 @@ fn handleMouseEvents(x: f64, y: f64, is_pressed_left: bool, is_pressed_right: bo
                     // text_buffer_dirty = true;
                 }
             },
+            .directory_select => {
+                log.info("Handling directory_select event", .{});
+
+                const new_directory_name = loaded_media_items.items[action.payload.directory_select.directory_id].name.toSlice();
+
+                current_directory = current_directory.openDir(new_directory_name, .{ .iterate = true }) catch |err| {
+                    log.err("Failed to change directory", .{});
+                    break;
+                };
+
+                text_buffer_dirty = true;
+                loaded_media_items.clear();
+
+                // TODO: Duplicated code
+
+                const max_media_items: u32 = 10;
+
+                var iterator = current_directory.iterate();
+                var entry = iterator.next() catch |err| {
+                    log.err("Failed to iterate directory", .{});
+                    break;
+                };
+
+                track_metadatas.clear();
+                audio_files.clear();
+
+                // TODO
+                const allocator = std.heap.c_allocator;
+
+                while (entry != null and loaded_media_items.count < max_media_items) {
+                    const item_name = entry.?.name;
+
+                    var media_item: MediaItem = undefined;
+                    media_item.kind = blk: {
+                        if (entry.?.kind == .Directory) {
+                            break :blk .directory;
+                        }
+
+                        if (item_name.len > 4) {
+                            const possible_extension_name = item_name[item_name.len - 4 ..];
+                            if (std.mem.eql(u8, possible_extension_name, "flac")) {
+                                break :blk .flac;
+                            } else if (std.mem.eql(u8, possible_extension_name, ".mp3")) {
+                                break :blk .mp3;
+                            } else {
+                                break :blk .unknown;
+                            }
+                        } else {
+                            break :blk .unknown;
+                        }
+                    };
+
+                    if (media_item.kind != .unknown) {
+                        media_item.name.fromSlice(item_name) catch |err| {
+                            unreachable;
+                        };
+                        _ = loaded_media_items.append(media_item);
+
+                        if (media_item.kind != .directory) {
+                            const new_name = allocator.dupeZ(u8, entry.?.name) catch |err| {
+                                unreachable;
+                            };
+
+                            var current_path_buffer: [64]u8 = undefined;
+                            const current_path = current_directory.realpath(".", current_path_buffer[0..]) catch |err| {
+                                unreachable;
+                            };
+
+                            const paths: [2][]const u8 = .{ current_path, item_name };
+                            const full_path = std.fs.path.joinZ(allocator, paths[0..]) catch null;
+                            defer allocator.free(full_path.?);
+
+                            log.info("Full path: {s}", .{full_path});
+
+                            // TODO:
+                            const track_metadata = blk: {
+                                if (media_item.kind == .mp3) {
+                                    break :blk audio.mp3.extractTrackMetadata(full_path.?) catch |err| {
+                                        unreachable;
+                                    };
+                                } else if (media_item.kind == .flac) {
+                                    break :blk audio.flac.extractTrackMetadata(full_path.?) catch |err| {
+                                        unreachable;
+                                    };
+                                } else {
+                                    unreachable;
+                                }
+                                unreachable;
+                            };
+
+                            log.info("Track title: {s}", .{track_metadata.title});
+
+                            _ = track_metadatas.append(track_metadata);
+                            _ = audio_files.append(new_name);
+                        }
+
+                        log.info("Media item: '{s}' {s}", .{ media_item.name.toSlice(), media_item.kind });
+                    }
+                    entry = iterator.next() catch |err| {
+                        unreachable;
+                    };
+                }
+            },
             .update_vertices => {
                 // TODO:
                 var gpa = std.heap.GeneralPurposeAllocator(.{}){};
@@ -1464,6 +1703,7 @@ const ActionType = enum(u8) {
     audio_play,
     audio_pause,
     audio_resume,
+    directory_select,
     // multi
 };
 
@@ -1522,6 +1762,11 @@ const ActionPayloadAudioPlay = packed struct {
     dummy: u8,
 };
 
+const ActionPayloadDirectorySelect = packed struct {
+    directory_id: u16,
+    dummy: u8,
+};
+
 const ActionPayload = packed union {
     color_set: ActionPayloadColorSet,
     audio_play: ActionPayloadAudioPlay,
@@ -1529,6 +1774,7 @@ const ActionPayload = packed union {
     audio_resume: ActionPayloadAudioResume,
     update_vertices: ActionPayloadVerticesUpdate,
     redirect: ActionPayloadRedirect,
+    directory_select: ActionPayloadDirectorySelect,
     custom: ActionPayloadCustom,
 };
 
@@ -1795,69 +2041,119 @@ fn update(allocator: *Allocator, app: *GraphicsContext) !void {
 
     media_button_toggle_audio_action_id = media_button_on_left_click_event_id_2;
 
+    const is_tracks: bool = blk: {
+        for (loaded_media_items.toSlice()) |media_item| {
+            if (media_item.kind == .mp3) break :blk true;
+        }
+        break :blk false;
+    };
+
     // TODO:
     var addicional_vertices: usize = 0;
-    for (track_metadatas.items[0..track_metadatas.count]) |track_metadata, track_index| {
-        const track_name = track_metadata.title[0..track_metadata.title_length];
 
-        const track_item_placement = geometry.Coordinates2D(.ndc_right){ .x = -0.8, .y = -0.8 + (@intToFloat(f32, track_index) * 0.075) };
-        const track_item_dimensions = geometry.Dimensions2D(.pixel){ .width = 600, .height = 30 };
+    if (!is_tracks) {
+        for (loaded_media_items.items[0..loaded_media_items.count]) |*media_item, media_i| {
+            const directory_name = media_item.name.toSlice();
 
-        const track_item_extent = geometry.Extent2D(.ndc_right){
-            .x = track_item_placement.x,
-            .y = track_item_placement.y,
-            .width = geometry.pixelToNativeDeviceCoordinateRight(track_item_dimensions.width, scale_factor.horizontal),
-            .height = geometry.pixelToNativeDeviceCoordinateRight(track_item_dimensions.height, scale_factor.vertical),
-        };
+            const row_colomn: u32 = 2;
+            const x: u32 = @intCast(u32, media_i) % row_colomn;
+            const y: u32 = @intCast(u32, media_i) / row_colomn;
 
-        const track_item_background_color = RGBA(f32){ .r = 0.9, .g = 0.5, .b = 0.5, .a = 1.0 };
-        const track_item_label_color = RGBA(f32){ .r = 0.0, .g = 0.0, .b = 0.0, .a = 1.0 };
+            const media_item_placement = geometry.Coordinates2D(.ndc_right){ .x = -0.8 + @intToFloat(f32, x) * 0.75, .y = -0.8 + (@intToFloat(f32, y) * 0.075) };
+            const media_item_dimensions = geometry.Dimensions2D(.pixel){ .width = 300, .height = 30 };
 
-        const track_item_faces = try gui.button.generate(GenericVertex, face_allocator, glyph_set, track_name, track_item_extent, scale_factor, track_item_background_color, track_item_label_color, .left);
+            const media_item_extent = geometry.Extent2D(.ndc_right){
+                .x = media_item_placement.x,
+                .y = media_item_placement.y,
+                .width = geometry.pixelToNativeDeviceCoordinateRight(media_item_dimensions.width, scale_factor.horizontal),
+                .height = geometry.pixelToNativeDeviceCoordinateRight(media_item_dimensions.height, scale_factor.vertical),
+            };
 
-        const track_item_on_left_click_event_id = event_system.registerMouseLeftPressAction(track_item_extent);
+            const media_item_background_color = RGBA(f32){ .r = 0.3, .g = 0.5, .b = 0.5, .a = 1.0 };
+            const media_item_label_color = RGBA(f32){ .r = 0.0, .g = 0.0, .b = 0.0, .a = 1.0 };
 
-        const track_item_audio_play_action_payload = ActionPayloadAudioPlay{
-            .id = @intCast(u16, track_index),
-            .dummy = 0,
-        };
+            const media_item_faces = try gui.button.generate(GenericVertex, face_allocator, glyph_set, directory_name, media_item_extent, scale_factor, media_item_background_color, media_item_label_color, .center);
 
-        const track_item_audio_play_action = Action{ .action_type = .audio_play, .payload = .{ .audio_play = track_item_audio_play_action_payload } };
-        assert(track_item_on_left_click_event_id == system_actions.append(track_item_audio_play_action));
+            const media_item_on_left_click_event_id = event_system.registerMouseLeftPressAction(media_item_extent);
 
-        // Register a mouse_hover event that will change the color of the button
-        const track_item_on_hover_color = RGBA(f32){ .r = 0.1, .g = 0.2, .b = 0.3, .a = 1.0 };
+            const directory_select_action_payload = ActionPayloadDirectorySelect{
+                .directory_id = @intCast(u16, media_i),
+                .dummy = 0,
+            };
 
-        const track_item_background_color_index = color_list.append(track_item_background_color);
-        const track_item_on_hover_color_index = color_list.append(track_item_on_hover_color);
+            const directory_select_action = Action{ .action_type = .directory_select, .payload = .{ .directory_select = directory_select_action_payload } };
+            assert(media_item_on_left_click_event_id == system_actions.append(directory_select_action));
 
-        // NOTE: system_actions needs to correspond to given on_hover_event_ids here
-        const track_item_on_hover_event_ids = event_system.registerMouseHoverReflexiveEnterAction(track_item_extent);
+            addicional_vertices += media_item_faces.len;
+        }
+    }
 
-        // Index of the quad face (I.e Mulples of 4 faces) within the face allocator
-        const track_item_quad_index = calculateQuadIndex(vertices, track_item_faces);
+    if (is_tracks) {
+        for (track_metadatas.items[0..track_metadatas.count]) |track_metadata, track_index| {
+            const track_name = track_metadata.title[0..track_metadata.title_length];
 
-        const track_item_update_color_vertex_attachment_index = @intCast(u8, vertex_range_attachments.append(.{ .vertex_begin = track_item_quad_index, .vertex_count = gui.button.face_count }));
+            log.info("Track name: {s}", .{track_name});
+            assert(track_name.len > 0);
 
-        const track_item_update_color_enter_action_payload = ActionPayloadColorSet{
-            .vertex_range_begin = track_item_update_color_vertex_attachment_index,
-            .vertex_range_span = 1,
-            .color_index = @intCast(u8, track_item_on_hover_color_index),
-        };
+            const track_item_placement = geometry.Coordinates2D(.ndc_right){ .x = -0.8, .y = -0.8 + (@intToFloat(f32, track_index) * 0.075) };
+            const track_item_dimensions = geometry.Dimensions2D(.pixel){ .width = 600, .height = 30 };
 
-        const track_item_update_color_exit_action_payload = ActionPayloadColorSet{
-            .vertex_range_begin = track_item_update_color_vertex_attachment_index,
-            .vertex_range_span = 1,
-            .color_index = @intCast(u8, track_item_background_color_index),
-        };
+            const track_item_extent = geometry.Extent2D(.ndc_right){
+                .x = track_item_placement.x,
+                .y = track_item_placement.y,
+                .width = geometry.pixelToNativeDeviceCoordinateRight(track_item_dimensions.width, scale_factor.horizontal),
+                .height = geometry.pixelToNativeDeviceCoordinateRight(track_item_dimensions.height, scale_factor.vertical),
+            };
 
-        const track_item_update_color_enter_action = Action{ .action_type = .color_set, .payload = .{ .color_set = track_item_update_color_enter_action_payload } };
-        const track_item_update_color_exit_action = Action{ .action_type = .color_set, .payload = .{ .color_set = track_item_update_color_exit_action_payload } };
+            const track_item_background_color = RGBA(f32){ .r = 0.9, .g = 0.5, .b = 0.5, .a = 1.0 };
+            const track_item_label_color = RGBA(f32){ .r = 0.0, .g = 0.0, .b = 0.0, .a = 1.0 };
 
-        assert(track_item_on_hover_event_ids[0] == system_actions.append(track_item_update_color_enter_action));
-        assert(track_item_on_hover_event_ids[1] == system_actions.append(track_item_update_color_exit_action));
+            const track_item_faces = try gui.button.generate(GenericVertex, face_allocator, glyph_set, track_name, track_item_extent, scale_factor, track_item_background_color, track_item_label_color, .left);
 
-        addicional_vertices += track_item_faces.len;
+            const track_item_on_left_click_event_id = event_system.registerMouseLeftPressAction(track_item_extent);
+
+            const track_item_audio_play_action_payload = ActionPayloadAudioPlay{
+                .id = @intCast(u16, track_index),
+                .dummy = 0,
+            };
+
+            const track_item_audio_play_action = Action{ .action_type = .audio_play, .payload = .{ .audio_play = track_item_audio_play_action_payload } };
+            assert(track_item_on_left_click_event_id == system_actions.append(track_item_audio_play_action));
+
+            // Register a mouse_hover event that will change the color of the button
+            const track_item_on_hover_color = RGBA(f32){ .r = 0.1, .g = 0.2, .b = 0.3, .a = 1.0 };
+
+            const track_item_background_color_index = color_list.append(track_item_background_color);
+            const track_item_on_hover_color_index = color_list.append(track_item_on_hover_color);
+
+            // NOTE: system_actions needs to correspond to given on_hover_event_ids here
+            const track_item_on_hover_event_ids = event_system.registerMouseHoverReflexiveEnterAction(track_item_extent);
+
+            // Index of the quad face (I.e Mulples of 4 faces) within the face allocator
+            const track_item_quad_index = calculateQuadIndex(vertices, track_item_faces);
+
+            const track_item_update_color_vertex_attachment_index = @intCast(u8, vertex_range_attachments.append(.{ .vertex_begin = track_item_quad_index, .vertex_count = gui.button.face_count }));
+
+            const track_item_update_color_enter_action_payload = ActionPayloadColorSet{
+                .vertex_range_begin = track_item_update_color_vertex_attachment_index,
+                .vertex_range_span = 1,
+                .color_index = @intCast(u8, track_item_on_hover_color_index),
+            };
+
+            const track_item_update_color_exit_action_payload = ActionPayloadColorSet{
+                .vertex_range_begin = track_item_update_color_vertex_attachment_index,
+                .vertex_range_span = 1,
+                .color_index = @intCast(u8, track_item_background_color_index),
+            };
+
+            const track_item_update_color_enter_action = Action{ .action_type = .color_set, .payload = .{ .color_set = track_item_update_color_enter_action_payload } };
+            const track_item_update_color_exit_action = Action{ .action_type = .color_set, .payload = .{ .color_set = track_item_update_color_exit_action_payload } };
+
+            assert(track_item_on_hover_event_ids[0] == system_actions.append(track_item_update_color_enter_action));
+            assert(track_item_on_hover_event_ids[1] == system_actions.append(track_item_update_color_exit_action));
+
+            addicional_vertices += track_item_faces.len;
+        }
     }
 
     //
