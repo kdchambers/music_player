@@ -1570,7 +1570,9 @@ fn handleMouseEvents(x: f64, y: f64, is_pressed_left: bool, is_pressed_right: bo
             .directory_select => {
                 log.info("Handling directory_select event", .{});
 
-                const new_directory_name = loaded_media_items.items[action.payload.directory_select.directory_id].name.toSlice();
+                const directory_id = action.payload.directory_select.directory_id;
+
+                const new_directory_name = if (directory_id == parent_directory_id) ".." else loaded_media_items.items[directory_id].name.toSlice();
 
                 current_directory = current_directory.openDir(new_directory_name, .{ .iterate = true }) catch |err| {
                     log.err("Failed to change directory", .{});
@@ -1854,6 +1856,7 @@ fn calculateQuadIndex(base: [*]align(16) GenericVertex, widget_faces: []QuadFace
 
 // TODO: move
 var media_button_toggle_audio_action_id: u32 = undefined;
+const parent_directory_id = std.math.maxInt(u16);
 
 fn update(allocator: *Allocator, app: *GraphicsContext) !void {
     const vertices = @ptrCast([*]GenericVertex, @alignCast(16, &mapped_device_memory[vertices_range_index_begin]));
@@ -1904,7 +1907,7 @@ fn update(allocator: *Allocator, app: *GraphicsContext) !void {
         const button_color = RGBA(f32){ .r = 0.9, .g = 0.5, .b = 0.5, .a = 1.0 };
         const label_color = RGBA(f32){ .r = 0.0, .g = 0.0, .b = 0.0, .a = 1.0 };
 
-        const faces = try gui.button.generate(GenericVertex, face_allocator, glyph_set, "<-", button_extent, scale_factor, button_color, label_color, .center);
+        const faces = try gui.button.generate(GenericVertex, face_allocator, glyph_set, "<", button_extent, scale_factor, button_color, label_color, .center);
 
         // Register a mouse_hover event that will change the color of the button
         const on_hover_color = RGBA(f32){ .r = 1.0, .g = 0.0, .b = 0.0, .a = 1.0 };
@@ -1912,33 +1915,47 @@ fn update(allocator: *Allocator, app: *GraphicsContext) !void {
         const button_color_index = color_list.append(button_color);
         const on_hover_color_index = color_list.append(on_hover_color);
 
-        // NOTE: system_actions needs to correspond to given on_hover_event_ids here
-        const on_hover_event_ids = event_system.registerMouseHoverReflexiveEnterAction(button_extent);
-
         // Index of the quad face (I.e Mulples of 4 faces) within the face allocator
         const widget_index = calculateQuadIndex(vertices, faces);
 
-        const vertex_attachment_index = @intCast(u8, vertex_range_attachments.append(.{ .vertex_begin = widget_index, .vertex_count = gui.button.face_count }));
+        // NOTE: system_actions needs to correspond to given on_hover_event_ids here
+        {
+            const on_hover_event_ids = event_system.registerMouseHoverReflexiveEnterAction(button_extent);
 
-        const on_hover_enter_action_payload = ActionPayloadColorSet{
-            .vertex_range_begin = vertex_attachment_index,
-            .vertex_range_span = 1,
-            .color_index = @intCast(u8, on_hover_color_index),
-        };
+            const vertex_attachment_index = @intCast(u8, vertex_range_attachments.append(.{ .vertex_begin = widget_index, .vertex_count = gui.button.face_count }));
 
-        const on_hover_exit_action_payload = ActionPayloadColorSet{
-            .vertex_range_begin = vertex_attachment_index,
-            .vertex_range_span = 1,
-            .color_index = @intCast(u8, button_color_index),
-        };
+            const on_hover_enter_action_payload = ActionPayloadColorSet{
+                .vertex_range_begin = vertex_attachment_index,
+                .vertex_range_span = 1,
+                .color_index = @intCast(u8, on_hover_color_index),
+            };
 
-        const on_hover_exit_action = Action{ .action_type = .color_set, .payload = .{ .color_set = on_hover_exit_action_payload } };
-        const on_hover_enter_action = Action{ .action_type = .color_set, .payload = .{ .color_set = on_hover_enter_action_payload } };
+            const on_hover_exit_action_payload = ActionPayloadColorSet{
+                .vertex_range_begin = vertex_attachment_index,
+                .vertex_range_span = 1,
+                .color_index = @intCast(u8, button_color_index),
+            };
 
-        log.info("Event ids for button: {d} {d}", .{ on_hover_event_ids[0], on_hover_event_ids[1] });
+            const on_hover_exit_action = Action{ .action_type = .color_set, .payload = .{ .color_set = on_hover_exit_action_payload } };
+            const on_hover_enter_action = Action{ .action_type = .color_set, .payload = .{ .color_set = on_hover_enter_action_payload } };
 
-        assert(on_hover_event_ids[0] == system_actions.append(on_hover_enter_action));
-        assert(on_hover_event_ids[1] == system_actions.append(on_hover_exit_action));
+            assert(on_hover_event_ids[0] == system_actions.append(on_hover_enter_action));
+            assert(on_hover_event_ids[1] == system_actions.append(on_hover_exit_action));
+        }
+
+        {
+
+            //
+            // When back button is clicked, change to parent directory
+            //
+
+            const on_click_event = event_system.registerMouseLeftPressAction(button_extent);
+
+            const directory_select_parent_action_payload = ActionPayloadDirectorySelect{ .directory_id = parent_directory_id, .dummy = 0 };
+            const directory_select_parent_action = Action{ .action_type = .directory_select, .payload = .{ .directory_select = directory_select_parent_action_payload } };
+
+            assert(on_click_event == system_actions.append(directory_select_parent_action));
+        }
 
         break :blk faces;
     };
