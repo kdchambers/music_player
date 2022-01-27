@@ -4,6 +4,8 @@
 // of the GNU General Public License as published by the Free Software Foundation, version 3.
 
 const std = @import("std");
+const log = std.log;
+const c = std.c;
 
 const warn = std.debug.warn;
 const info = std.debug.warn;
@@ -11,11 +13,10 @@ const info = std.debug.warn;
 const assert = std.debug.assert;
 const Allocator = std.mem.Allocator;
 
-const vk = @import("vulkan");
-const zvk = @import("vulkan_wrapper.zig");
 const geometry = @import("geometry.zig");
 const graphics = @import("graphics.zig");
 const gui = @import("gui.zig");
+const font = @import("font.zig");
 
 const Mesh = graphics.Mesh;
 const RGBA = graphics.RGBA;
@@ -25,11 +26,10 @@ const QuadFace = graphics.QuadFace;
 const utility = @import("utility.zig");
 const digitCount = utility.digitCount;
 
-pub const ft = @cImport({
-    @cInclude("freetype2/ft2build.h");
-    @cDefine("FT_FREETYPE_H", {});
-    @cInclude("freetype2/freetype/freetype.h");
-});
+// TODO
+const Scale2D = geometry.Scale2D;
+// TODO: Remove circ dependency
+const Dimensions2D = font.Dimensions2D;
 
 // TODO: Color channel hard coded to 9.0 both here and in shader
 pub const GenericVertex = packed struct { x: f32 = 0.0, y: f32 = 0.0, tx: f32 = 9.0, ty: f32 = 9.0, color: RGBA(f32) = .{
@@ -104,7 +104,34 @@ pub const GlyphSet = struct {
 };
 
 // TODO: Separate image generation to own function
-pub fn createGlyphSet(allocator: *Allocator, face: ft.FT_Face, character_list: []const u8) !GlyphSet {
+pub fn createGlyphSet(allocator: *Allocator, character_list: []const u8) !GlyphSet {
+
+    // TODO:
+    // Use zig stdlib for loading files
+    // Use allocator instead of hardcoded array
+    // Don't use hardcoded system installed font
+    const font_path: [:0]const u8 = "/usr/share/fonts/TTF/Hack-Regular.ttf";
+    var ttf_buffer: [1024 * 300]u8 align(64) = undefined;
+
+    const file_handle = c.fopen(font_path, "rb");
+    if (file_handle == null) {
+        return error.FailedToOpenFontFile;
+    }
+
+    if (c.fread(&ttf_buffer, 1, 1024 * 300, file_handle.?) != (1024 * 300)) {
+        return error.FailedToLoadFont;
+    }
+    _ = c.fclose(file_handle.?);
+
+    assert(font.getFontOffsetForIndex(ttf_buffer[0..], 0) == 0);
+    var font_info = try font.initializeFont(allocator, ttf_buffer[0..]);
+
+    const scale = Scale2D(f32){
+        // TODO
+        .x = font.scaleForPixelHeight(font_info, 20),
+        .y = font.scaleForPixelHeight(font_info, 20),
+    };
+
     var glyph_set: GlyphSet = undefined;
 
     glyph_set.character_list = try allocator.alloc(u8, character_list.len);
@@ -115,29 +142,35 @@ pub fn createGlyphSet(allocator: *Allocator, face: ft.FT_Face, character_list: [
     glyph_set.glyph_information = try allocator.alloc(GlyphMeta, character_list.len);
     glyph_set.cells_per_row = @floatToInt(u8, @sqrt(@intToFloat(f64, character_list.len)));
 
+    assert(glyph_set.cells_per_row > 0);
+
     var max_width: u32 = 0;
     var max_height: u32 = 0;
+
+    const font_ascent = @intToFloat(f32, font.getAscent(font_info)) * scale.y;
+    const font_descent = @intToFloat(f32, font.getDescent(font_info)) * scale.y;
 
     // In order to not waste space on our texture, we loop through each glyph and find the largest dimensions required
     // We then use the largest width and height to form the cell size that each glyph will be put into
     for (character_list) |char, i| {
-        if (ft.FT_Load_Char(face, char, ft.FT_LOAD_RENDER) != ft.FT_Err_Ok) {
-            warn("Failed to load char {}\n", .{char});
-            return error.LoadFreeTypeCharFailed;
-        }
+        const dimensions = try font.getRequiredDimensions(font_info, char, scale);
 
-        const width = face.*.glyph.*.bitmap.width;
-        const height = face.*.glyph.*.bitmap.rows;
+        assert(dimensions.width > 0);
+        assert(dimensions.height > 0);
+
+        const width = dimensions.width;
+        const height = dimensions.height;
         if (width > max_width) max_width = width;
         if (height > max_height) max_height = height;
 
-        // Also, we can extract additional glyph information
-        glyph_set.glyph_information[i].vertical_offset = @intCast(i16, face.*.glyph.*.metrics.height - face.*.glyph.*.metrics.horiBearingY);
-        glyph_set.glyph_information[i].advance = @intCast(u16, face.*.glyph.*.metrics.horiAdvance);
+        const bounding_box = try font.getCodepointBitmapBox(font_info, char, scale);
+
+        glyph_set.glyph_information[i].vertical_offset = @intCast(i16, bounding_box.y1);
+        glyph_set.glyph_information[i].advance = 80.0;
 
         glyph_set.glyph_information[i].dimensions = .{
-            .width = @intCast(u16, @divTrunc(face.*.glyph.*.metrics.width, 64)),
-            .height = @intCast(u16, @divTrunc(face.*.glyph.*.metrics.height, 64)),
+            .width = @intCast(u16, dimensions.width),
+            .height = @intCast(u16, dimensions.height),
         };
     }
 
@@ -175,17 +208,20 @@ pub fn createGlyphSet(allocator: *Allocator, face: ft.FT_Face, character_list: [
             continue;
         }
 
-        if (ft.FT_Load_Char(face, character_list[i], ft.FT_LOAD_RENDER) != ft.FT_Err_Ok) {
-            warn("Failed to load char {}\n", .{character_list[i]});
-            return error.LoadFreeTypeCharFailed;
-        }
+        const bitmap = try font.getCodepointBitmap(allocator, font_info, scale, character_list[i]);
+        defer allocator.free(bitmap.pixels);
 
-        const width = face.*.glyph.*.bitmap.width;
-        const height = face.*.glyph.*.bitmap.rows;
+        const width = @intCast(u16, bitmap.width);
+        const height = @intCast(u16, bitmap.height);
+
+        // Don't keep a bitmap buffer for ' '
+        // We want the meta details though
+        if (character_list[i] == ' ') continue;
 
         // Buffer is 8-bit pixel greyscale
         // Will need to be converted into RGBA, etc
-        const buffer = @ptrCast([*]u8, face.*.glyph.*.bitmap.buffer);
+        // const buffer = @ptrCast([*]u8, face.*.glyph.*.bitmap.buffer);
+        const buffer = @ptrCast([*]u8, bitmap.pixels);
 
         assert(width <= max_width);
         assert(width > 0);
@@ -215,7 +251,7 @@ pub fn createGlyphSet(allocator: *Allocator, face: ft.FT_Face, character_list: [
                     assert(texture_index < (height * width));
                     texture_index += 1;
                 } else {
-                    glyph_set.image[pixel_index] = graphics.color(RGBA(f32)).clear();
+                    glyph_set.image[pixel_index] = graphics.Color(RGBA(f32)).clear();
                 }
             }
             x = 0;

@@ -3,6 +3,7 @@
 // This program is free software: you can redistribute it and/or modify it under the terms
 // of the GNU General Public License as published by the Free Software Foundation, version 3.
 
+// TODO: Revisit this concept
 const CoordinateSystem = enum(u4) {
     percentage,
     pixel,
@@ -53,6 +54,20 @@ pub const ScaleFactor2D = packed struct {
     horizontal: f32,
     vertical: f32,
 };
+
+pub fn Scale2D(comptime T: type) type {
+    return packed struct {
+        x: T,
+        y: T,
+    };
+}
+
+pub fn Shift2D(comptime T: type) type {
+    return packed struct {
+        x: T,
+        y: T,
+    };
+}
 
 pub fn translate(comptime coordinate_system: CoordinateSystem, comptime BaseType: type, coordinate_list: []BaseType, translation: geometry.Coordinates2D(coordinate_system)) void {
     for (coordinate_list) |*coordinate| {

@@ -91,6 +91,8 @@ pub const GenericPipeline = struct {
         allocator.free(self.framebuffers);
     }
 
+    const clear_color = RGBA.fromInt(u8, 47, 48, 48, 255);
+
     pub fn recordRenderPass(
         self: *GenericPipeline,
         command_buffers: []vk.CommandBuffer,
@@ -102,9 +104,7 @@ pub const GenericPipeline = struct {
         const clear_colors = [1]vk.ClearValue{
             vk.ClearValue{
                 .color = vk.ClearColorValue{
-                    .float32 = [4]f32{
-                        norm(26, 255), norm(26, 255), norm(26, 255), 1.0,
-                    },
+                    .float32 = @bitCast([4]f32, clear_color),
                 },
             },
         };

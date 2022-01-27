@@ -141,12 +141,18 @@ pub const mp3 = struct {
     }
 
     pub fn playFile(allocator: *Allocator, file_path: [:0]const u8) !void {
+        if (output.playback_state != .stopped) {
+            output.playback_state = .stopped;
+        }
+
+        std.time.sleep(std.time.ns_per_ms * 250);
         const file = try std.fs.openFileAbsolute(file_path, .{ .read = true });
 
         const file_stat = try file.stat();
         const file_size = file_stat.size;
 
         var input_buffer = try allocator.alloc(u8, file_size);
+        // defer allocator.free(input_buffer);
         const bytes_read = try file.readAll(input_buffer);
 
         if (bytes_read != file_size) {
@@ -158,6 +164,7 @@ pub const mp3 = struct {
 
         // TODO(keith): I believe you have to read the frames to get the real size
         decoded_mp3_buffer.buffer = try allocator.alloc(u8, input_buffer.len * 10);
+        // defer allocator.free(decoded_mp3_buffer.buffer);
 
         _ = decode(&input_buffer);
 

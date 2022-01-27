@@ -18,7 +18,6 @@ const Allocator = std.mem.Allocator;
 
 const zigimg = @import("zigimg");
 
-const ft = text.ft;
 const vk = @import("vulkan");
 const glfw = vk.glfw;
 
@@ -216,6 +215,8 @@ const MediaItem = struct {
 const library_root_path = "/mnt/data/media/music";
 var loaded_media_items: FixedBuffer(MediaItem, 32) = .{ .count = 0 };
 var current_directory: std.fs.Dir = undefined;
+
+const font = @import("font.zig");
 
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
@@ -783,12 +784,6 @@ var image_memory_map: [*]u8 = undefined;
 var texture_size_bytes: usize = 0;
 
 fn setupApplication(allocator: *Allocator, app: *GraphicsContext) !void {
-    var font_library: ft.FT_Library = try freetype.init();
-    var font_face: ft.FT_Face = try freetype.newFace(font_library, config.font_path, 0);
-
-    // TODO: Wrap FT api in zig code
-    _ = ft.FT_Select_Charmap(font_face, @intToEnum(ft.enum_FT_Encoding_, ft.FT_ENCODING_UNICODE));
-    _ = ft.FT_Set_Pixel_Sizes(font_face, 0, config.font_size);
 
     // TODO: Hard coded asset path
     const initial_second_image = try zigimg.Image.fromFilePath(allocator, "/home/keith/projects/zv_widgets_1/assets/warm_spirals_cropped.png");
@@ -823,17 +818,8 @@ fn setupApplication(allocator: *Allocator, app: *GraphicsContext) !void {
         .height = @intCast(u32, large_image.height),
     };
 
-    const processed_image = try shrinkImage(allocator, _converted_image, image_initial_dimensions, .{ .width = 100, .height = 170 });
-    defer allocator.free(processed_image);
-
-    const font_texture_chars =
-        \\abcdefghijklmnopqrstuvwxyz
-        \\ABCDEFGHIJKLMNOPQRSTUVWXYZ
-        \\0123456789
-        \\!\"£$%^&*()-_=+[]{};:'@#~,<.>/?\\|
-    ;
-
-    glyph_set = try text.createGlyphSet(allocator, font_face, font_texture_chars[0..]);
+    const font_texture_chars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!\"£$%^&*()-_=+[]{};:'@#~,<.>/?\\|";
+    glyph_set = try text.createGlyphSet(allocator, font_texture_chars[0..]);
 
     var memory_properties = zvk.getDevicePhysicalMemoryProperties(app.physical_device);
     // zvk.logDevicePhysicalMemoryProperties(memory_properties);
@@ -844,6 +830,7 @@ fn setupApplication(allocator: *Allocator, app: *GraphicsContext) !void {
     log.info("Glyph dimensions: {}x{}", .{ texture_width, texture_height });
 
     texture_size_bytes = glyph_set.image.len * @sizeOf(RGBA(f32));
+    assert(glyph_set.image.len == (texture_width * texture_height));
 
     assert(texture_size_bytes == (texture_width * texture_height * @sizeOf(RGBA(f32))));
 
@@ -938,7 +925,6 @@ fn setupApplication(allocator: *Allocator, app: *GraphicsContext) !void {
         // Copy our second image to same memory
         // TODO: Fix data layout access
         @memcpy(image_memory_map, @ptrCast([*]u8, glyph_set.image), texture_size_bytes);
-        @memcpy(image_memory_map + texture_size_bytes, @ptrCast([*]u8, processed_image), texture_size_bytes);
 
         // No need to unmap memory
         // vk.vkUnmapMemory(app.logical_device, staging_memory);
@@ -1005,7 +991,6 @@ fn setupApplication(allocator: *Allocator, app: *GraphicsContext) !void {
         // Copy our second image to same memory
         // TODO: Fix data layout access
         @memcpy(image_memory_map, @ptrCast([*]u8, glyph_set.image), texture_size_bytes);
-        @memcpy(image_memory_map + texture_size_bytes, @ptrCast([*]u8, processed_image), texture_size_bytes);
     }
 
     // Regardless of whether a staging buffer was used, and the type of memory that backs the texture
@@ -1877,6 +1862,8 @@ fn calculateQuadIndex(base: [*]align(16) GenericVertex, widget_faces: []QuadFace
 // TODO: move
 var media_button_toggle_audio_action_id: u32 = undefined;
 const parent_directory_id = std.math.maxInt(u16);
+// TODO: Duplicated in pipelines/generic.zig
+const app_background_color = RGBA(f32).fromInt(u8, 47, 48, 48, 255);
 
 fn update(allocator: *Allocator, app: *GraphicsContext) !void {
     const vertices = @ptrCast([*]GenericVertex, @alignCast(16, &mapped_device_memory[vertices_range_index_begin]));
@@ -2032,16 +2019,6 @@ fn update(allocator: *Allocator, app: *GraphicsContext) !void {
     //       we need to reserve a second for the resumed icon
     var media_button_paused_faces = try face_allocator.alloc(QuadFace(GenericVertex), 2);
 
-    {
-        // const media_button_on_left_click_event_id = event_system.registerMouseLeftPressAction(media_button_paused_extent);
-        // const media_button_resume_audio_action_payload = ActionPayloadAudioResume{
-        // .dummy = 0,
-        // };
-
-        // const media_button_resume_audio_action = Action{ .action_type = .audio_resume, .payload = .{ .audio_resume = media_button_resume_audio_action_payload } };
-        // assert(media_button_on_left_click_event_id == system_actions.append(media_button_resume_audio_action));
-    }
-
     media_button_paused_faces[0] = graphics.generateTriangleColored(GenericVertex, media_button_paused_extent, media_button_color);
     media_button_paused_faces[1] = null_face;
 
@@ -2107,7 +2084,7 @@ fn update(allocator: *Allocator, app: *GraphicsContext) !void {
                 .height = geometry.pixelToNativeDeviceCoordinateRight(media_item_dimensions.height, scale_factor.vertical),
             };
 
-            const media_item_background_color = RGBA(f32){ .r = 0.3, .g = 0.5, .b = 0.5, .a = 1.0 };
+            const media_item_background_color = RGBA(f32).fromInt(u8, 100, 100, 100, 255);
             const media_item_label_color = RGBA(f32){ .r = 0.0, .g = 0.0, .b = 0.0, .a = 1.0 };
 
             const media_item_faces = try gui.button.generate(GenericVertex, face_allocator, glyph_set, directory_name, media_item_extent, scale_factor, media_item_background_color, media_item_label_color, .center);
@@ -2143,8 +2120,8 @@ fn update(allocator: *Allocator, app: *GraphicsContext) !void {
                 .height = geometry.pixelToNativeDeviceCoordinateRight(track_item_dimensions.height, scale_factor.vertical),
             };
 
-            const track_item_background_color = RGBA(f32){ .r = 0.9, .g = 0.5, .b = 0.5, .a = 1.0 };
-            const track_item_label_color = RGBA(f32){ .r = 0.0, .g = 0.0, .b = 0.0, .a = 1.0 };
+            const track_item_background_color = app_background_color;
+            const track_item_label_color = RGBA(f32){ .r = 1.0, .g = 1.0, .b = 1.0, .a = 1.0 };
 
             const track_item_faces = try gui.button.generate(GenericVertex, face_allocator, glyph_set, track_name, track_item_extent, scale_factor, track_item_background_color, track_item_label_color, .left);
 

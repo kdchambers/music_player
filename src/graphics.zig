@@ -16,6 +16,17 @@ pub fn QuadFace(comptime VertexType: type) type {
 
 pub fn RGBA(comptime BaseType: type) type {
     return packed struct {
+        const This = @This();
+
+        pub fn fromInt(comptime IntType: type, r: IntType, g: IntType, b: IntType, a: IntType) This {
+            return .{
+                .r = @intToFloat(BaseType, r) / 255.0,
+                .g = @intToFloat(BaseType, g) / 255.0,
+                .b = @intToFloat(BaseType, b) / 255.0,
+                .a = @intToFloat(BaseType, a) / 255.0,
+            };
+        }
+
         r: BaseType,
         g: BaseType,
         b: BaseType,
@@ -23,7 +34,7 @@ pub fn RGBA(comptime BaseType: type) type {
     };
 }
 
-pub fn color(comptime Type: type) type {
+pub fn Color(comptime Type: type) type {
     return struct {
         pub fn clear() Type {
             return .{

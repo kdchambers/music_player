@@ -254,6 +254,8 @@ pub fn generateText(
     var skipped_count: u32 = 0;
     const line_height: f32 = if (line_height_opt != null) line_height_opt.? else 0;
 
+    var x_increment: f32 = 0.0;
+
     for (text_buffer) |char, i| {
         if (char == '\n') {
             // If line_height_opt was not set, we're not expecting new lines in text_buffer
@@ -275,20 +277,22 @@ pub fn generateText(
                         break :blk x;
                     }
                 }
-                log.err("Charactor not in set '{c}' '{s}'", .{ char, text_buffer });
-                continue;
-                // return error.CharacterNotInSet;
+                log.err("Charactor not in set '{c}' (ascii {d}) in '{s}'", .{ char, char, text_buffer });
+                return error.InvalidCharacter;
             };
 
-            const x_increment = (@intToFloat(f32, glyph_set.glyph_information[glyph_index].advance) / 64.0) * scale_factor.horizontal;
+            // TODO:
+            x_increment += 0.02;
+
             const texture_extent = try glyph_set.imageRegionForGlyph(glyph_index);
+
             const glyph_dimensions = glyph_set.glyph_information[glyph_index].dimensions;
 
             // Positive offset (Glyphs with a descent get shift down)
-            const y_offset = (@intToFloat(f32, glyph_set.glyph_information[glyph_index].vertical_offset) / 64) * scale_factor.vertical;
+            const y_offset = @intToFloat(f32, glyph_set.glyph_information[glyph_index].vertical_offset) * scale_factor.vertical;
 
             const placement = geometry.Coordinates2D(.ndc_right){
-                .x = origin.x + (x_increment * @intToFloat(f32, cursor.x)),
+                .x = origin.x + x_increment,
                 .y = origin.y + y_offset + (line_height * @intToFloat(f32, cursor.y)),
             };
 
@@ -301,7 +305,9 @@ pub fn generateText(
             for (vertices[i - skipped_count]) |*vertex| {
                 vertex.color = color;
             }
+            x_increment += (@intToFloat(f32, glyph_set.glyph_information[glyph_index].advance) / 64.0) * scale_factor.horizontal;
         } else {
+            x_increment += 0.02;
             skipped_count += 1;
         }
 
