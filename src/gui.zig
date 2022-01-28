@@ -67,7 +67,7 @@ pub const button = struct {
         background_face.* = graphics.generateQuadColored(VertexType, extent, color);
 
         const line_height = 18.0 * scale_factor.vertical;
-        const space_width = 10.0 * scale_factor.horizontal;
+        const space_width = 4.0 * scale_factor.horizontal;
         const label_dimensions = try calculateRenderedTextDimensions(label, glyph_set, scale_factor, line_height, space_width);
 
         const horizontal_margin = blk: {
@@ -213,7 +213,7 @@ pub fn calculateRenderedTextDimensions(
                 // return error.CharacterNotInSet;
             };
 
-            dimensions.width += (@intToFloat(f32, glyph_set.glyph_information[glyph_index].advance) / 64.0) * scale_factor.horizontal;
+            dimensions.width += (@intToFloat(f32, glyph_set.glyph_information[glyph_index].advance)) * scale_factor.horizontal;
             const glyph_height = @intToFloat(f32, glyph_set.glyph_information[glyph_index].dimensions.height) * scale_factor.vertical;
 
             if (glyph_height > highest_height) {
@@ -281,11 +281,7 @@ pub fn generateText(
                 return error.InvalidCharacter;
             };
 
-            // TODO:
-            x_increment += 0.02;
-
             const texture_extent = try glyph_set.imageRegionForGlyph(glyph_index);
-
             const glyph_dimensions = glyph_set.glyph_information[glyph_index].dimensions;
 
             // Positive offset (Glyphs with a descent get shift down)
@@ -305,9 +301,10 @@ pub fn generateText(
             for (vertices[i - skipped_count]) |*vertex| {
                 vertex.color = color;
             }
-            x_increment += (@intToFloat(f32, glyph_set.glyph_information[glyph_index].advance) / 64.0) * scale_factor.horizontal;
+            x_increment += @intToFloat(f32, glyph_set.glyph_information[glyph_index].advance) * scale_factor.horizontal;
         } else {
-            x_increment += 0.02;
+            // TODO: Space hardcoded to 4 pixels
+            x_increment += 4 * scale_factor.horizontal;
             skipped_count += 1;
         }
 

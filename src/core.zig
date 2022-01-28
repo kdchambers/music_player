@@ -2085,7 +2085,7 @@ fn update(allocator: *Allocator, app: *GraphicsContext) !void {
             };
 
             const media_item_background_color = RGBA(f32).fromInt(u8, 100, 100, 100, 255);
-            const media_item_label_color = RGBA(f32){ .r = 0.0, .g = 0.0, .b = 0.0, .a = 1.0 };
+            const media_item_label_color = RGBA(f32){ .r = 1.0, .g = 1.0, .b = 1.0, .a = 1.0 };
 
             const media_item_faces = try gui.button.generate(GenericVertex, face_allocator, glyph_set, directory_name, media_item_extent, scale_factor, media_item_background_color, media_item_label_color, .center);
 

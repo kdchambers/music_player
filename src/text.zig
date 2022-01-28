@@ -166,7 +166,7 @@ pub fn createGlyphSet(allocator: *Allocator, character_list: []const u8) !GlyphS
         const bounding_box = try font.getCodepointBitmapBox(font_info, char, scale);
 
         glyph_set.glyph_information[i].vertical_offset = @intCast(i16, bounding_box.y1);
-        glyph_set.glyph_information[i].advance = 80.0;
+        glyph_set.glyph_information[i].advance = @intCast(u16, dimensions.width) + 2;
 
         glyph_set.glyph_information[i].dimensions = .{
             .width = @intCast(u16, dimensions.width),

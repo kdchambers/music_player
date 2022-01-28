@@ -513,6 +513,7 @@ fn getGlyphShape(allocator: *Allocator, info: FontInfo, glyph_index: i32) ![]Ver
                     // two off-curve control points in a row means interpolate an on-curve midpoint
                     if (was_off) {
                         setVertex(&vertices[vertices_count], .curve, (cx + x) >> 1, (cy + y) >> 1, cx, cy);
+                        vertices_count += 1;
                     }
                     cx = x;
                     cy = y;
@@ -694,6 +695,7 @@ fn tessellateCurve(points: *[]Point(f32), x0: f32, y0: f32, x1: f32, y1: f32, x2
 }
 
 fn tessellateCubic(points: *[]Point(f32), x0: f32, y0: f32, x1: f32, y1: f32, x2: f32, y2: f32, x3: f32, y3: f32, objspace_flatness_squared: f32, n: i32) u32 {
+    assert(false);
     const dx0: f32 = x1 - x0;
     const dy0: f32 = y1 - y0;
     const dx1: f32 = x2 - x1;
@@ -776,7 +778,8 @@ fn flattenCurves(allocator: *Allocator, vertices: []Vertex, objspace_flatness: f
     var points_count: u32 = 0;
     var start: i32 = 0;
 
-    const points = try allocator.alloc(Point(f32), 100);
+    // TODO: Calculate required points
+    const points = try allocator.alloc(Point(f32), 200);
 
     var x: f32 = 0;
     var y: f32 = 0;
@@ -809,11 +812,13 @@ fn flattenCurves(allocator: *Allocator, vertices: []Vertex, objspace_flatness: f
                 const fx: f32 = @intToFloat(f32, vertex.x);
                 const fy: f32 = @intToFloat(f32, vertex.y);
 
-                points_count += tessellateCurve(&points[points_count..], fx, fy, fcx, fcy, fx, fy, objspace_flatness_squared, 0);
+                points_count += tessellateCurve(&points[points_count..], x, y, fcx, fcy, fx, fy, objspace_flatness_squared, 0);
                 x = @intToFloat(f32, vertex.x);
                 y = @intToFloat(f32, vertex.y);
             },
             @enumToInt(VMove.cubic) => {
+                assert(false);
+
                 const fcx: f32 = @intToFloat(f32, vertex.cx);
                 const fcy: f32 = @intToFloat(f32, vertex.cy);
                 const fcx1: f32 = @intToFloat(f32, vertex.cx1);
@@ -870,8 +875,6 @@ fn rasterize(allocator: *Allocator, flatness_in_pixels: f32, dimensions: Dimensi
     if (points.len == 0) {
         return error.NoPointsToRasterize;
     }
-
-    // printPoints(points);
 
     const vsubsample: f32 = 1.0;
     const y_scale_inv: f32 = if (invert) -scale.y else scale.y;
@@ -964,7 +967,7 @@ fn printActiveEdge(e: ActiveEdge) void {
 }
 
 const EdgeHeap = struct {
-    pub const capacity: comptime_int = 20;
+    pub const capacity: comptime_int = 50;
 
     edges: [@This().capacity]ActiveEdge,
     count: u32,
@@ -1045,8 +1048,7 @@ fn rasterizeSortedEdges(allocator: *Allocator, edges: []Edge, dimensions: Dimens
     scanline2 = @intToPtr([*]f32, @ptrToInt(&scanline) + (@intCast(usize, dimensions.width) * @sizeOf(f32)));
 
     y = offset.y;
-
-    edges[edges.len - 1].y0 = (@intToFloat(f32, offset.y) + @intToFloat(f32, dimensions.height)) + 1.0;
+    edges[edges.len - 1].y0 = (@intToFloat(f32, offset.y) + @intToFloat(f32, dimensions.height)) + 2.0;
 
     assert(bitmap.width > 0);
     assert(bitmap.height > 0);
