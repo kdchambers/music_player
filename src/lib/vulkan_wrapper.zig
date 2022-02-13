@@ -3,11 +3,15 @@
 // This program is free software: you can redistribute it and/or modify it under the terms
 // of the GNU General Public License as published by the Free Software Foundation, version 3.
 
-const vk = @import("vulkan");
 const std = @import("std");
+const vk = @import("vulkan");
+const vulkan_config = @import("vulkan_config");
+const glfw = @import("glfw");
 const assert = std.debug.assert;
 const log = std.log;
 const Allocator = std.mem.Allocator;
+
+const success = vk.Result.success;
 
 // TODO: Add format function for std print instead
 pub fn logDevicePhysicalMemoryProperties(memory_properties: vk.PhysicalDeviceMemoryProperties) void {
@@ -54,7 +58,7 @@ pub fn getDevicePhysicalMemoryProperties(physical_device: vk.PhysicalDevice) vk.
 
 pub fn allocateMemory(device: vk.Device, allocate_info: vk.MemoryAllocateInfo) !vk.DeviceMemory {
     var memory: vk.DeviceMemory = undefined;
-    if (.SUCCESS != vk.vkAllocateMemory(device, &allocate_info, null, &memory)) {
+    if (success != vk.vkAllocateMemory(device, &allocate_info, null, &memory)) {
         return error.AllocateMemoryFailed;
     }
     return memory;
@@ -62,131 +66,116 @@ pub fn allocateMemory(device: vk.Device, allocate_info: vk.MemoryAllocateInfo) !
 
 pub fn createImageView(device: vk.Device, create_info: vk.ImageViewCreateInfo) !vk.ImageView {
     var image_view: vk.ImageView = undefined;
-    if (vk.vkCreateImageView(device, &create_info, null, &image_view) != .SUCCESS) {
+    if (vk.vkCreateImageView(device, &create_info, null, &image_view) != .success) {
         return error.CreateImageViewFailed;
     }
     return image_view;
 }
 
 pub fn endCommandBuffer(command_buffer: vk.CommandBuffer) !void {
-    if (vk.vkEndCommandBuffer(command_buffer) != .SUCCESS) {
+    if (vk.vkEndCommandBuffer(command_buffer) != .success) {
         return error.EndCommandBufferFailed;
     }
 }
 
-pub fn beginCommandBuffer(command_buffer: vk.CommandBuffer, begin_command_info: vk.CommandBufferBeginInfo) !void {
-    if (vk.vkBeginCommandBuffer(command_buffer, &begin_command_info) != .SUCCESS) {
-        return error.BeginCommandBufferFailed;
-    }
-}
-
-pub fn allocateCommandBuffers(allocator: *std.mem.Allocator, device: vk.Device, allocation_info: vk.CommandBufferAllocateInfo) ![]vk.CommandBuffer {
+pub fn allocateCommandBuffers(allocator: std.mem.Allocator, device: vk.Device, allocation_info: vk.CommandBufferAllocateInfo) ![]vk.CommandBuffer {
     var command_buffers: []vk.CommandBuffer = try allocator.alloc(vk.CommandBuffer, allocation_info.commandBufferCount);
-    if (vk.vkAllocateCommandBuffers(device, &allocation_info, command_buffers.ptr) != .SUCCESS) {
+    if (vk.vkAllocateCommandBuffers(device, &allocation_info, command_buffers.ptr) != .success) {
         return error.AllocateCommandBuffersFailed;
     }
     return command_buffers;
 }
 
-pub fn allocateCommandBuffer(device: vk.Device, allocation_info: vk.CommandBufferAllocateInfo) !vk.CommandBuffer {
-    assert(allocation_info.commandBufferCount == 1);
+pub fn allocateCommandBuffer(comptime DeviceDispatch: type, device_dispatch: DeviceDispatch, device: vk.Device, allocation_info: vk.CommandBufferAllocateInfo) !vk.CommandBuffer {
+    assert(allocation_info.command_buffer_count == 1);
     var command_buffer: vk.CommandBuffer = undefined;
-    if (vk.vkAllocateCommandBuffers(device, &allocation_info, @ptrCast([*]vk.CommandBuffer, &command_buffer)) != .SUCCESS) {
-        return error.AllocateCommandBuffersFailed;
-    }
+    try device_dispatch.allocateCommandBuffers(device, &allocation_info, @ptrCast([*]vk.CommandBuffer, &command_buffer));
     return command_buffer;
 }
 
 pub fn createBuffer(device: vk.Device, create_buffer_info: vk.BufferCreateInfo) !vk.Buffer {
     var buffer: vk.Buffer = undefined;
-    if (.SUCCESS != vk.vkCreateBuffer(device, &create_buffer_info, null, &buffer)) {
+    if (.success != vk.vkCreateBuffer(device, &create_buffer_info, null, &buffer)) {
         return error.CreateBufferFailed;
     }
     return buffer;
 }
 
-pub fn createImage(logical_device: vk.Device, create_image_info: vk.ImageCreateInfo) !vk.Image {
-    var image: vk.Image = undefined;
-    if (.SUCCESS != vk.vkCreateImage(logical_device, &create_image_info, null, &image)) {
-        return error.CreateImageFailed;
-    }
+pub fn createImage(comptime DeviceDispatch: type, device_dispatch: DeviceDispatch, logical_device: vk.Device, create_image_info: vk.ImageCreateInfo) !vk.Image {
+    var image: vk.Image = try device_dispatch.createImage(logical_device, &create_image_info, null);
+
+    // if (.success != device_dispatch.createImage(logical_device, &create_image_info, null, &image)) {
+    // return error.CreateImageFailed;
+    // }
     return image;
 }
 
 pub fn createCommandPool(logical_device: vk.Device, command_pool_create_info: vk.CommandPoolCreateInfo) !vk.CommandPool {
     var command_pool: vk.CommandPool = undefined;
-    if (.SUCCESS != vk.vkCreateCommandPool(logical_device, &command_pool_create_info, null, &command_pool)) {
+    if (.success != vk.vkCreateCommandPool(logical_device, &command_pool_create_info, null, &command_pool)) {
         return error.CreateCommandPoolFailed;
     }
     return command_pool;
 }
 
-pub fn getPhysicalDeviceSurfaceFormatsKHRCount(physical_device: vk.PhysicalDevice, surface: vk.SurfaceKHR) !u32 {
+pub fn getPhysicalDeviceSurfaceFormatsKHRCount(comptime InstanceDispatch: type, instance_dispatch: InstanceDispatch, physical_device: vk.PhysicalDevice, surface: vk.SurfaceKHR) !u32 {
     var format_count: u32 = undefined;
-
-    if (vk.vkGetPhysicalDeviceSurfaceFormatsKHR(physical_device, surface, &format_count, null) != .SUCCESS) {
-        return error.FailedToGetNumberSurfaceFormats;
-    }
-
+    _ = try instance_dispatch.getPhysicalDeviceSurfaceFormatsKHR(physical_device, surface, &format_count, null);
     return format_count;
 }
 
-pub fn getPhysicalDeviceSurfacePresentModesKHRCount(physical_device: vk.PhysicalDevice, surface: vk.SurfaceKHR) !u32 {
+pub fn getPhysicalDeviceSurfacePresentModesKHRCount(comptime InstanceDispatch: type, instance_dispatch: InstanceDispatch, physical_device: vk.PhysicalDevice, surface: vk.SurfaceKHR) !u32 {
     var present_mode_count: u32 = undefined;
-    if (vk.vkGetPhysicalDeviceSurfacePresentModesKHR(physical_device, surface, &present_mode_count, null) != .SUCCESS) {
+    if ((try instance_dispatch.getPhysicalDeviceSurfacePresentModesKHR(physical_device, surface, &present_mode_count, null)) != success) {
         return error.FailedToGetNumberPresentModes;
     }
     return present_mode_count;
 }
 
-pub fn getPhysicalDeviceSurfacePresentModesKHR(allocator: *Allocator, physical_device: vk.PhysicalDevice, surface: vk.SurfaceKHR) ![]vk.PresentModeKHR {
+pub fn getPhysicalDeviceSurfacePresentModesKHR(comptime InstanceDispatch: type, instance_dispatch: InstanceDispatch, allocator: Allocator, physical_device: vk.PhysicalDevice, surface: vk.SurfaceKHR) ![]vk.PresentModeKHR {
     var present_mode_count: u32 = undefined;
-    if (vk.vkGetPhysicalDeviceSurfacePresentModesKHR(physical_device, surface, &present_mode_count, null) != .SUCCESS) {
+    if ((try instance_dispatch.getPhysicalDeviceSurfacePresentModesKHR(physical_device, surface, &present_mode_count, null)) != success) {
         return error.FailedToGetPresentModesCount;
     }
     var present_modes = try allocator.alloc(vk.PresentModeKHR, present_mode_count);
-    if (vk.vkGetPhysicalDeviceSurfacePresentModesKHR(physical_device, surface, &present_mode_count, present_modes.ptr) != .SUCCESS) {
+    if ((try instance_dispatch.getPhysicalDeviceSurfacePresentModesKHR(physical_device, surface, &present_mode_count, present_modes.ptr)) != .success) {
         return error.FailedToGetPresentModes;
     }
 
     return present_modes;
 }
 
-pub fn enumeratePhysicalDevices(allocator: *std.mem.Allocator, instance: vk.Instance) ![]vk.PhysicalDevice {
+pub fn enumeratePhysicalDevices(allocator: Allocator, instance: vk.Instance, instance_dispatch: vk.InstanceDispatch) ![]vk.PhysicalDevice {
     var device_count: u32 = 0;
-    if (vk.vkEnumeratePhysicalDevices(instance, &device_count, null) != .SUCCESS) {
-        return error.FailedToGetPhysicalDevicesCount;
-    }
+    _ = instance_dispatch.enumeratePhysicalDevices(instance, &device_count, null);
 
     if (device_count == 0) {
         return error.NoDevicesFound;
     }
 
     const devices = try allocator.alloc(vk.PhysicalDevice, device_count);
-    if (vk.vkEnumeratePhysicalDevices(instance, &device_count, devices.ptr) != .SUCCESS) {
-        return error.FailedToGetPhysicalDevices;
-    }
+    _ = instance_dispatch.enumeratePhysicalDevices(instance, &device_count, devices.ptr);
 
     return devices;
 }
 
-pub fn createSwapchain(logical_device: vk.Device, create_info: vk.SwapchainCreateInfoKHR) !vk.SwapchainKHR {
-    var swapchain: vk.SwapchainKHR = undefined;
-    if (vk.vkCreateSwapchainKHR(logical_device, &create_info, null, &swapchain) != .SUCCESS) {
-        return error.FailedToCreateSwapchain;
-    }
+// pub fn createSwapchain(logical_device: vk.Device, create_info: vk.SwapchainCreateInfoKHR) !vk.SwapchainKHR {
+// var swapchain: vk.SwapchainKHR = undefined;
+// if (vk.vkCreateSwapchainKHR(logical_device, &create_info, null, &swapchain) != .success) {
+// return error.FailedToCreateSwapchain;
+// }
 
-    return swapchain;
-}
+// return swapchain;
+// }
 
-pub fn getSwapchainImagesKHR(allocator: *std.mem.Allocator, logical_device: vk.Device, swapchain: vk.SwapchainKHR) ![]vk.Image {
+pub fn getSwapchainImagesKHR(comptime DeviceDispatch: type, device_dispatch: DeviceDispatch, allocator: std.mem.Allocator, logical_device: vk.Device, swapchain: vk.SwapchainKHR) ![]vk.Image {
     var image_count: u32 = undefined;
-    if (vk.vkGetSwapchainImagesKHR(logical_device, swapchain, &image_count, null) != .SUCCESS) {
+    if ((try device_dispatch.getSwapchainImagesKHR(logical_device, swapchain, &image_count, null)) != success) {
         return error.FailedToGetSwapchainImagesCount;
     }
 
     var swapchain_images = try allocator.alloc(vk.Image, image_count);
-    if (vk.vkGetSwapchainImagesKHR(logical_device, swapchain, &image_count, swapchain_images.ptr) != .SUCCESS) {
+    if ((try device_dispatch.getSwapchainImagesKHR(logical_device, swapchain, &image_count, swapchain_images.ptr)) != .success) {
         return error.FailedToGetSwapchainImages;
     }
 
@@ -194,26 +183,26 @@ pub fn getSwapchainImagesKHR(allocator: *std.mem.Allocator, logical_device: vk.D
 }
 
 // TODO: Take ShaderModuleCreateInfo as param
-pub fn createShaderModule(logical_device: vk.Device, code: []align(@alignOf(u32)) const u8) !vk.ShaderModule {
-    const create_info = vk.ShaderModuleCreateInfo{
-        .sType = vk.StructureType.SHADER_MODULE_CREATE_INFO,
-        .codeSize = code.len,
-        .pCode = @ptrCast([*]const u32, &code[0]),
-        .pNext = null,
-        .flags = .{},
-    };
+// pub fn createShaderModule(logical_device: vk.Device, code: []align(@alignOf(u32)) const u8) !vk.ShaderModule {
+// const create_info = vk.ShaderModuleCreateInfo{
+// .sType = vk.StructureType.SHADER_MODULE_CREATE_INFO,
+// .codeSize = code.len,
+// .pCode = @ptrCast([*]const u32, &code[0]),
+// .pNext = null,
+// .flags = .{},
+// };
 
-    var shader_module: vk.ShaderModule = undefined;
-    if (vk.vkCreateShaderModule(logical_device, &create_info, null, &shader_module) != .SUCCESS) {
-        return error.CreateShaderModuleFailed;
-    }
+// var shader_module: vk.ShaderModule = undefined;
+// if (vk.vkCreateShaderModule(logical_device, &create_info, null, &shader_module) != .success) {
+// return error.CreateShaderModuleFailed;
+// }
 
-    return shader_module;
-}
+// return shader_module;
+// }
 
-pub fn getPhysicalDeviceSurfaceFormatsKHR(allocator: *std.mem.Allocator, physical_device: vk.PhysicalDevice, surface: vk.SurfaceKHR) ![]vk.SurfaceFormatKHR {
+pub fn getPhysicalDeviceSurfaceFormatsKHR(comptime InstanceDispatch: type, instance_dispatch: InstanceDispatch, allocator: std.mem.Allocator, physical_device: vk.PhysicalDevice, surface: vk.SurfaceKHR) ![]vk.SurfaceFormatKHR {
     var format_count: u32 = undefined;
-    if (vk.vkGetPhysicalDeviceSurfaceFormatsKHR(physical_device, surface, &format_count, null) != .SUCCESS) {
+    if ((try instance_dispatch.getPhysicalDeviceSurfaceFormatsKHR(physical_device, surface, &format_count, null)) != success) {
         return error.FailedToGetSurfaceFormatCount;
     }
 
@@ -221,7 +210,7 @@ pub fn getPhysicalDeviceSurfaceFormatsKHR(allocator: *std.mem.Allocator, physica
     assert(format_count != 0);
 
     var available_formats: []vk.SurfaceFormatKHR = try allocator.alloc(vk.SurfaceFormatKHR, format_count);
-    if (vk.vkGetPhysicalDeviceSurfaceFormatsKHR(physical_device, surface, &format_count, available_formats.ptr) != .SUCCESS) {
+    if ((try instance_dispatch.getPhysicalDeviceSurfaceFormatsKHR(physical_device, surface, &format_count, available_formats.ptr)) != success) {
         return error.FailedToGetSurfaceFormats;
     }
 
@@ -230,14 +219,14 @@ pub fn getPhysicalDeviceSurfaceFormatsKHR(allocator: *std.mem.Allocator, physica
 
 pub fn getPhysicalDeviceSurfaceCapabilitiesKHR(physical_device: vk.PhysicalDevice, surface: vk.SurfaceKHR) !vk.SurfaceCapabilitiesKHR {
     var surface_capabilities: vk.SurfaceCapabilitiesKHR = undefined;
-    if (vk.vkGetPhysicalDeviceSurfaceCapabilitiesKHR(physical_device, surface, &surface_capabilities) != .SUCCESS) {
+    if (vk.vkGetPhysicalDeviceSurfaceCapabilitiesKHR(physical_device, surface, &surface_capabilities) != .success) {
         return error.UnableToGetSurfaceCapabilities;
     }
     return surface_capabilities;
 }
 
 pub fn bindBufferMemory(logical_device: vk.Device, buffer: vk.Buffer, memory: vk.DeviceMemory, offset: u32) !void {
-    if (.SUCCESS != vk.vkBindBufferMemory(logical_device, buffer, memory, offset)) {
+    if (.success != vk.vkBindBufferMemory(logical_device, buffer, memory, offset)) {
         return error.BindBufferMemoryFailed;
     }
 }
@@ -257,11 +246,11 @@ pub fn createBufferOnMemory(logical_device: vk.Device, size: vk.DeviceSize, memo
 
     var buffer: vk.Buffer = undefined;
 
-    if (vk.vkCreateBuffer(logical_device, &buffer_create_info, null, &buffer) != .SUCCESS) {
+    if (vk.vkCreateBuffer(logical_device, &buffer_create_info, null, &buffer) != .success) {
         return error.CreateBufferFailed;
     }
 
-    if (vk.vkBindBufferMemory(logical_device, buffer, memory, memory_offset) != .SUCCESS) {
+    if (vk.vkBindBufferMemory(logical_device, buffer, memory, memory_offset) != .success) {
         return error.BindBufferMemoryFailed;
     }
 
@@ -270,15 +259,15 @@ pub fn createBufferOnMemory(logical_device: vk.Device, size: vk.DeviceSize, memo
 
 // TODO: Audit
 pub fn chooseSwapSurfaceFormat(available_formats: []vk.SurfaceFormatKHR) vk.SurfaceFormatKHR {
-    if (available_formats.len == 1 and available_formats[0].format == .UNDEFINED) {
+    if (available_formats.len == 1 and available_formats[0].format == .@"undefined") {
         return vk.SurfaceFormatKHR{
-            .format = .B8G8R8A8_UNORM,
-            .colorSpace = .SRGB_NONLINEAR,
+            .format = .b8g8r8a8_unorm,
+            .color_space = .srgb_nonlinear_khr,
         };
     }
 
     for (available_formats) |available_format| {
-        if (available_format.format == .B8G8R8A8_UNORM and available_format.colorSpace == .SRGB_NONLINEAR) {
+        if (available_format.format == .b8g8r8a8_unorm and available_format.color_space == .srgb_nonlinear_khr) {
             return available_format;
         }
     }
@@ -290,13 +279,13 @@ pub fn chooseSwapSurfaceFormat(available_formats: []vk.SurfaceFormatKHR) vk.Surf
 
 pub fn createFrameBuffer(logical_device: vk.Device, create_info: vk.FramebufferCreateInfo) !vk.Framebuffer {
     var framebuffer: vk.Framebuffer = undefined;
-    if (vk.vkCreateFramebuffer(logical_device, &create_info, null, &framebuffer) != .SUCCESS) {
+    if (vk.vkCreateFramebuffer(logical_device, &create_info, null, &framebuffer) != .success) {
         return error.CreateFrameBufferFailed;
     }
     return framebuffer;
 }
 
-pub fn createFrameBuffersAlloc(allocator: *Allocator, logical_device: vk.Device, create_infos: []vk.FramebufferCreateInfo) ![]vk.Framebuffer {
+pub fn createFrameBuffersAlloc(allocator: Allocator, logical_device: vk.Device, create_infos: []vk.FramebufferCreateInfo) ![]vk.Framebuffer {
     var framebuffers = try allocator.alloc(vk.Framebuffer, create_infos.len);
     errdefer allocator.free(framebuffers);
 
@@ -309,50 +298,41 @@ pub fn createFrameBuffersAlloc(allocator: *Allocator, logical_device: vk.Device,
 
 pub fn createInstance(create_info: vk.InstanceCreateInfo) !vk.Instance {
     var instance: vk.Instance = undefined;
-    if (vk.vkCreateInstance(&create_info, null, &instance) != .SUCCESS) {
+    if (vk.vkCreateInstance(&create_info, null, &instance) != .success) {
         return error.InstanceCreationFailed;
     }
     return instance;
 }
 
-pub fn createDevice(physical_device: vk.PhysicalDevice, create_info: vk.DeviceCreateInfo) !vk.Device {
-    var logical_device: vk.Device = undefined;
-    if (vk.vkCreateDevice(physical_device, &create_info, null, &logical_device) != .SUCCESS) {
-        return error.FailedToCreateDevice;
-    }
-
+pub fn createDevice(comptime InstanceDispatch: type, instance_dispatch: InstanceDispatch, physical_device: vk.PhysicalDevice, create_info: vk.DeviceCreateInfo) !vk.Device {
+    var logical_device: vk.Device = try instance_dispatch.createDevice(physical_device, &create_info, null);
     return logical_device;
 }
 
-pub fn deviceSupportsExtensions(allocator: *Allocator, physical_device: vk.PhysicalDevice, requested_extensions: []const [*:0]const u8) !bool {
+pub fn deviceSupportsExtensions(comptime VulkanInstanceDispatch: type, instance_dispatch: VulkanInstanceDispatch, allocator: Allocator, physical_device: vk.PhysicalDevice, requested_extensions: []const [*:0]const u8) !bool {
     var extension_count: u32 = undefined;
-    if (vk.vkEnumerateDeviceExtensionProperties(physical_device, null, &extension_count, null) != .SUCCESS) {
-        return error.FailedToGetDevicePropertiesCount;
-    }
+    _ = try instance_dispatch.enumerateDeviceExtensionProperties(physical_device, null, &extension_count, null);
 
     const available_extensions = try allocator.alloc(vk.ExtensionProperties, extension_count);
     defer allocator.free(available_extensions);
 
-    if (vk.vkEnumerateDeviceExtensionProperties(physical_device, null, &extension_count, available_extensions.ptr) != .SUCCESS) {
-        return error.FailedToGetDeviceProperties;
-    }
+    _ = try instance_dispatch.enumerateDeviceExtensionProperties(physical_device, null, &extension_count, available_extensions.ptr);
 
     dev_extensions: for (requested_extensions) |requested_extension| {
         for (available_extensions) |available_extension| {
-            if (std.cstr.cmp(requested_extension, &available_extension.extensionName) == 0) {
+            const len = std.mem.indexOfScalar(u8, &available_extension.extension_name, 0).?;
+            if (std.mem.eql(u8, std.mem.span(requested_extension), available_extension.extension_name[0..len])) {
                 continue :dev_extensions;
             }
         }
-
         return false;
     }
-
     return true;
 }
 
-pub fn createSurfaceGlfw(instance: vk.Instance, window: *vk.GLFWwindow) !vk.SurfaceKHR {
+pub fn createSurfaceGlfw(instance: vk.Instance, window: glfw.Window) !vk.SurfaceKHR {
     var surface: vk.SurfaceKHR = undefined;
-    if (.SUCCESS != vk.glfwCreateWindowSurface(instance, window, null, &surface)) {
+    if (.success != glfw.createWindowSurface(instance, window, null, &surface)) {
         var err_description: [*:0]u8 = undefined;
         _ = vk.glfwGetError(&err_description);
         log.warn("Failed to create surface: {s}", .{err_description});
@@ -363,14 +343,8 @@ pub fn createSurfaceGlfw(instance: vk.Instance, window: *vk.GLFWwindow) !vk.Surf
 }
 
 pub fn glfwGetRequiredInstanceExtensions() ![]const [*:0]const u8 {
-    var glfwExtensionCount: u32 = 0;
-    var glfwExtensions = vk.glfwGetRequiredInstanceExtensions(&glfwExtensionCount);
-
-    if (glfwExtensionCount == 0 or glfwExtensions == null) {
-        return error.GetRequiredGLFWExtensionsFailed;
-    }
-
-    return glfwExtensions.?[0..glfwExtensionCount];
+    var glfwExtensions = try glfw.getRequiredInstanceExtensions();
+    return glfwExtensions;
 }
 
 pub fn logMemoryRequirements(memory_requirements: vk.MemoryRequirements) void {
@@ -382,13 +356,9 @@ pub fn logMemoryRequirements(memory_requirements: vk.MemoryRequirements) void {
 
 pub fn createRenderPass(logical_device: vk.Device, create_info: vk.RenderPassCreateInfo) !vk.RenderPass {
     var render_pass: vk.RenderPass = undefined;
-    if (vk.vkCreateRenderPass(logical_device, &create_info, null, &render_pass) != .SUCCESS) {
+    if (vk.vkCreateRenderPass(logical_device, &create_info, null, &render_pass) != .success) {
         return error.CreateRenderPassFailed;
     }
 
     return render_pass;
-}
-
-pub fn beginRenderPass(command_buffer: vk.CommandBuffer, pRenderPassBegin: *const RenderPassBeginInfo, contents: SubpassContents) void {
-    vk.vkCmdBeginRenderPass(command_buffer, &begin_render_pass_info, .INLINE);
 }

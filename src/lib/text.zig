@@ -13,18 +13,23 @@ const info = std.debug.warn;
 const assert = std.debug.assert;
 const Allocator = std.mem.Allocator;
 
-const geometry = @import("geometry.zig");
-const graphics = @import("graphics.zig");
-const gui = @import("gui.zig");
-const font = @import("font.zig");
+const geometry = @import("geometry");
+const graphics = @import("graphics");
+// const gui = @import("gui");
+const font = @import("font");
 
 const Mesh = graphics.Mesh;
 const RGBA = graphics.RGBA;
 const ScaleFactor2D = geometry.ScaleFactor2D;
 const QuadFace = graphics.QuadFace;
 
-const utility = @import("utility.zig");
+const utility = @import("utility");
 const digitCount = utility.digitCount;
+
+const constants = @import("constants");
+
+const TexturePixelBaseType = constants.TexturePixelBaseType;
+const TextureNormalizedBaseType = constants.TextureNormalizedBaseType;
 
 // TODO
 const Scale2D = geometry.Scale2D;
@@ -42,7 +47,7 @@ pub const GenericVertex = packed struct { x: f32 = 0.0, y: f32 = 0.0, tx: f32 = 
 pub const GlyphMeta = packed struct {
     advance: u16,
     vertical_offset: i16,
-    dimensions: geometry.Dimensions2D(.pixel16),
+    dimensions: geometry.Dimensions2D(u16),
 };
 
 // TODO: Sort characters and use binary search
@@ -58,7 +63,7 @@ pub const GlyphSet = struct {
     cell_width: u16,
     cell_height: u16,
 
-    pub fn deinit(self: GlyphSet, allocator: *Allocator) void {
+    pub fn deinit(self: GlyphSet, allocator: Allocator) void {
         allocator.free(self.character_list);
         allocator.free(self.glyph_information);
     }
@@ -92,19 +97,21 @@ pub const GlyphSet = struct {
         };
     }
 
-    pub fn imageRegionForGlyph(self: GlyphSet, char_index: usize) !geometry.Extent2D(.normalized) {
+    pub fn imageRegionForGlyph(self: GlyphSet, char_index: usize, texture_dimensions: geometry.Dimensions2D(TexturePixelBaseType)) !geometry.Extent2D(TextureNormalizedBaseType) {
         if (char_index >= self.character_list.len) return error.InvalidIndex;
-        return geometry.Extent2D(.normalized){
-            .width = @intToFloat(f32, self.glyph_information[char_index].dimensions.width) / @intToFloat(f32, self.width()),
-            .height = @intToFloat(f32, self.glyph_information[char_index].dimensions.height) / @intToFloat(f32, self.height()),
-            .x = @intToFloat(f32, (char_index % self.cells_per_row) * self.cell_width) / @intToFloat(f32, self.width()),
-            .y = @intToFloat(f32, (char_index / self.cells_per_row) * self.cell_height) / @intToFloat(f32, self.height()),
+        return geometry.Extent2D(TextureNormalizedBaseType){
+            .width = @intToFloat(f32, self.glyph_information[char_index].dimensions.width) / @intToFloat(f32, texture_dimensions.width),
+            .height = @intToFloat(f32, self.glyph_information[char_index].dimensions.height) / @intToFloat(f32, texture_dimensions.height),
+            .x = @intToFloat(f32, (char_index % self.cells_per_row) * self.cell_width) / @intToFloat(f32, texture_dimensions.width),
+            .y = @intToFloat(f32, (char_index / self.cells_per_row) * self.cell_height) / @intToFloat(f32, texture_dimensions.height),
         };
     }
 };
 
 // TODO: Separate image generation to own function
-pub fn createGlyphSet(allocator: *Allocator, character_list: []const u8) !GlyphSet {
+pub fn createGlyphSet(allocator: Allocator, character_list: []const u8, texture_dimensions: geometry.Dimensions2D(TexturePixelBaseType)) !GlyphSet {
+    assert(texture_dimensions.height == 512);
+    assert(texture_dimensions.width == 512);
 
     // TODO:
     // Use zig stdlib for loading files
@@ -128,8 +135,8 @@ pub fn createGlyphSet(allocator: *Allocator, character_list: []const u8) !GlyphS
 
     const scale = Scale2D(f32){
         // TODO
-        .x = font.scaleForPixelHeight(font_info, 20),
-        .y = font.scaleForPixelHeight(font_info, 20),
+        .x = font.scaleForPixelHeight(font_info, 18),
+        .y = font.scaleForPixelHeight(font_info, 18),
     };
 
     var glyph_set: GlyphSet = undefined;
@@ -142,13 +149,17 @@ pub fn createGlyphSet(allocator: *Allocator, character_list: []const u8) !GlyphS
     glyph_set.glyph_information = try allocator.alloc(GlyphMeta, character_list.len);
     glyph_set.cells_per_row = @floatToInt(u8, @sqrt(@intToFloat(f64, character_list.len)));
 
+    assert(glyph_set.cells_per_row == 9);
+
     assert(glyph_set.cells_per_row > 0);
 
     var max_width: u32 = 0;
     var max_height: u32 = 0;
 
     const font_ascent = @intToFloat(f32, font.getAscent(font_info)) * scale.y;
+    _ = font_ascent;
     const font_descent = @intToFloat(f32, font.getDescent(font_info)) * scale.y;
+    _ = font_descent;
 
     // In order to not waste space on our texture, we loop through each glyph and find the largest dimensions required
     // We then use the largest width and height to form the cell size that each glyph will be put into
@@ -179,28 +190,28 @@ pub fn createGlyphSet(allocator: *Allocator, character_list: []const u8) !GlyphS
     // Therefore, we need to compute required_cells_count to allocate enough space for the full texture
     const required_cells_count = glyph_set.cellColumnsCount();
 
-    glyph_set.image = try allocator.alloc(RGBA(f32), required_cells_count * max_height * max_width);
+    glyph_set.image = try allocator.alloc(RGBA(f32), @intCast(u64, texture_dimensions.height) * texture_dimensions.width);
     errdefer allocator.free(glyph_set.image);
 
-    var i: u32 = 0;
+    var i: u16 = 0;
     while (i < required_cells_count) : (i += 1) {
-        const cell_position = geometry.Coordinates2D(.carthesian){
+        const cell_position = geometry.Coordinates2D(TexturePixelBaseType){
             .x = @mod(i, glyph_set.cells_per_row),
-            .y = (i * max_width) / (max_width * glyph_set.cells_per_row),
+            .y = @intCast(TexturePixelBaseType, (i * max_width) / (max_width * glyph_set.cells_per_row)),
         };
 
         // Trailing cells (Once we've rasterized all our characters) filled in as transparent pixels
         if (i >= character_list.len) {
-            var x: u32 = 0;
-            var y: u32 = 0;
+            var x: u16 = 0;
+            var y: u16 = 0;
             while (y < max_height) : (y += 1) {
                 while (x < max_width) : (x += 1) {
-                    const texture_position = geometry.Coordinates2D(.pixel){
-                        .x = cell_position.x * max_width + x,
-                        .y = cell_position.y * max_height + y,
+                    const texture_position = geometry.Coordinates2D(u16){
+                        .x = @intCast(u16, cell_position.x * max_width + x),
+                        .y = @intCast(u16, cell_position.y * max_height + y),
                     };
 
-                    const pixel_index: usize = texture_position.y * (max_width * glyph_set.cells_per_row) + texture_position.x;
+                    const pixel_index: usize = @intCast(u64, texture_position.y) * (texture_dimensions.width) + texture_position.x;
                     glyph_set.image[pixel_index] = .{ .r = 1.0, .g = 0.0, .b = 0.0, .a = 0.0 };
                 }
                 x = 0;
@@ -228,24 +239,27 @@ pub fn createGlyphSet(allocator: *Allocator, character_list: []const u8) !GlyphS
         assert(height <= max_height);
         assert(height > 0);
 
-        var x: u32 = 0;
         var y: u32 = 0;
         var texture_index: u32 = 0;
 
         while (y < max_height) : (y += 1) {
+            var x: u32 = 0;
             while (x < max_width) : (x += 1) {
                 const background_pixel = (y >= height or x >= width);
-                const texture_position = geometry.Coordinates2D(.pixel){
-                    .x = cell_position.x * max_width + x,
-                    .y = cell_position.y * max_height + y,
+                const texture_position = geometry.Coordinates2D(TexturePixelBaseType){
+                    .x = @intCast(TexturePixelBaseType, cell_position.x * max_width + x),
+                    .y = @intCast(TexturePixelBaseType, cell_position.y * max_height + y),
                 };
 
-                const pixel_index: usize = texture_position.y * (max_width * glyph_set.cells_per_row) + texture_position.x;
+                const pixel_index: usize = (@intCast(u64, texture_position.y) * texture_dimensions.width) + texture_position.x;
+
+                assert(i < glyph_set.cells_per_row or pixel_index > texture_dimensions.width);
+
                 if (!background_pixel) {
                     glyph_set.image[pixel_index] = .{
-                        .r = @intToFloat(f32, buffer[texture_index]) / 255.0,
-                        .g = @intToFloat(f32, buffer[texture_index]) / 255.0,
-                        .b = @intToFloat(f32, buffer[texture_index]) / 255.0,
+                        .r = 1.0, // @intToFloat(f32, buffer[texture_index]) / 255.0,
+                        .g = 1.0, // @intToFloat(f32, buffer[texture_index]) / 255.0,
+                        .b = 1.0, // @intToFloat(f32, buffer[texture_index]) / 255.0,
                         .a = @intToFloat(f32, buffer[texture_index]) / 255.0,
                     };
                     assert(texture_index < (height * width));
@@ -254,7 +268,6 @@ pub fn createGlyphSet(allocator: *Allocator, character_list: []const u8) !GlyphS
                     glyph_set.image[pixel_index] = graphics.Color(RGBA(f32)).clear();
                 }
             }
-            x = 0;
         }
     }
 
@@ -264,9 +277,9 @@ pub fn createGlyphSet(allocator: *Allocator, character_list: []const u8) !GlyphS
     return glyph_set;
 }
 
-pub fn writeText(face_allocator: *Allocator, glyph_set: GlyphSet, placement: geometry.Coordinates2D(.ndc_right), scale_factor: ScaleFactor2D, text: []const u8) ![]QuadFace(GenericVertex) {
-    // TODO: Don't hardcode line height to XX pixels
-    const line_height = 18.0 * scale_factor.vertical;
-    const color = RGBA(f32){ .r = 0.8, .g = 0.2, .b = 0.7, .a = 1.0 };
-    return try gui.generateText(GenericVertex, face_allocator, text, placement, scale_factor, glyph_set, color, line_height);
-}
+// pub fn writeText(face_allocator: Allocator, glyph_set: GlyphSet, placement: geometry.Coordinates2D(.ndc_right), scale_factor: ScaleFactor2D, text: []const u8) ![]QuadFace(GenericVertex) {
+// // TODO: Don't hardcode line height to XX pixels
+// const line_height = 18.0 * scale_factor.vertical;
+// const color = RGBA(f32){ .r = 0.8, .g = 0.2, .b = 0.7, .a = 1.0 };
+// return try gui.generateText(GenericVertex, face_allocator, text, placement, scale_factor, glyph_set, color, line_height);
+// }

@@ -18,8 +18,17 @@ const CoordinateSystem = enum(u4) {
     ndc_right,
 };
 
-/// Return the underlying type used to represent the given coordinate system
-fn BaseType(comptime coordinate_system: CoordinateSystem) type {
+pub inline fn Pixel(comptime Type: type) type {
+    // TODO: Add error checking to type
+    return Type;
+}
+
+pub inline fn Normalized(comptime Type: type) type {
+    // TODO: Add error checking to type
+    return Type;
+}
+
+pub fn TypeFor(comptime coordinate_system: CoordinateSystem) type {
     return switch (coordinate_system) {
         .percentage, .ndc_right, .normalized => f32,
         .pixel, .millimeter, .carthesian => u32,
@@ -27,53 +36,48 @@ fn BaseType(comptime coordinate_system: CoordinateSystem) type {
     };
 }
 
-pub fn Coordinates2D(comptime coordinate_system: CoordinateSystem) type {
+pub fn Coordinates2D(comptime BaseType: type) type {
     return packed struct {
-        x: BaseType(coordinate_system),
-        y: BaseType(coordinate_system),
+        x: BaseType,
+        y: BaseType,
     };
 }
 
-pub fn Dimensions2D(comptime coordinate_system: CoordinateSystem) type {
+pub fn Dimensions2D(comptime BaseType: type) type {
     return packed struct {
-        height: BaseType(coordinate_system),
-        width: BaseType(coordinate_system),
+        height: BaseType,
+        width: BaseType,
     };
 }
 
-pub fn Extent2D(comptime coordinate_system: CoordinateSystem) type {
+pub fn Extent2D(comptime BaseType: type) type {
     return packed struct {
-        x: BaseType(coordinate_system),
-        y: BaseType(coordinate_system),
-        height: BaseType(coordinate_system),
-        width: BaseType(coordinate_system),
+        x: BaseType,
+        y: BaseType,
+        height: BaseType,
+        width: BaseType,
     };
 }
 
-pub const ScaleFactor2D = packed struct {
-    horizontal: f32,
-    vertical: f32,
-};
-
-pub fn Scale2D(comptime T: type) type {
+pub fn ScaleFactor2D(comptime BaseType: type) type {
     return packed struct {
-        x: T,
-        y: T,
+        horizontal: BaseType,
+        vertical: BaseType,
     };
 }
 
-pub fn Shift2D(comptime T: type) type {
+pub fn Scale2D(comptime BaseType: type) type {
     return packed struct {
-        x: T,
-        y: T,
+        x: BaseType,
+        y: BaseType,
     };
 }
 
-pub fn translate(comptime coordinate_system: CoordinateSystem, comptime BaseType: type, coordinate_list: []BaseType, translation: geometry.Coordinates2D(coordinate_system)) void {
-    for (coordinate_list) |*coordinate| {
-        coordinate.x += translation.x;
-        coordinate.y += translation.y;
-    }
+pub fn Shift2D(comptime BaseType: type) type {
+    return packed struct {
+        x: BaseType,
+        y: BaseType,
+    };
 }
 
 /// Converts a Coordinates2D structure using absolute pixel values to one
@@ -83,7 +87,7 @@ pub fn translate(comptime coordinate_system: CoordinateSystem, comptime BaseType
 fn coordinates2DPixelToNativeDeviceCoordinateRight(
     coordinates: Coordinates2D(.pixel),
     scale_factor: ScaleFactor2D,
-) geometry.Coordinates2D {
+) Coordinates2D {
     return .{
         .x = coordinates.x * scale_factor.horizontal,
         .y = coordinates.y * scale_factor.vertical,

@@ -4,6 +4,7 @@
 // of the GNU General Public License as published by the Free Software Foundation, version 3.
 
 const std = @import("std");
+const Allocator = std.mem.Allocator;
 const os = std.os;
 const assert = std.debug.assert;
 const log = std.log;
@@ -20,13 +21,14 @@ pub fn digitCount(number: u32) u16 {
 
 pub fn logMemoryUsage(allocator: *Allocator) !void {
     const pid = os.linux.getpid();
-    const proc_path = try fmt.allocPrint(allocator, "/proc/{d}/", .{pid});
+    const proc_path = try std.fmt.allocPrint(allocator, "/proc/{d}/", .{pid});
     defer allocator.free(proc_path);
 
-    const proc_dir = try fs.openDirAbsolute(proc_path, .{ .access_sub_paths = true });
+    const proc_dir = try std.fs.openDirAbsolute(proc_path, .{ .access_sub_paths = true });
 
     var statm_buffer: [64]u8 = undefined;
     const statm_contents = try proc_dir.readFile("statm", statm_buffer[0..]);
+    _ = statm_contents;
 
     var number_digit_count: u32 = 0;
     var number_begin_index: u32 = 0;
@@ -34,7 +36,7 @@ pub fn logMemoryUsage(allocator: *Allocator) !void {
 
     for (statm_buffer) |char, i| {
         if (char == ' ') {
-            const value = try fmt.parseInt(u32, statm_buffer[number_begin_index .. number_begin_index + number_digit_count], 10);
+            const value = try std.fmt.parseInt(u32, statm_buffer[number_begin_index .. number_begin_index + number_digit_count], 10);
 
             // From: https://man7.org/linux/man-pages/man5/proc.5.html on statm
             //

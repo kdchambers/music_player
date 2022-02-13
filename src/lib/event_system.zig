@@ -3,16 +3,19 @@ const log = std.log;
 const assert = std.debug.assert;
 const ArrayList = std.ArrayList;
 const Allocator = std.mem.Allocator;
-const graphics = @import("graphics.zig");
+const graphics = @import("graphics");
 const RGBA = graphics.RGBA;
 const QuadFace = graphics.QuadFace;
-const text = @import("text.zig");
+const text = @import("text");
 const GenericVertex = text.GenericVertex;
-const geometry = @import("geometry.zig");
+const geometry = @import("geometry");
 const ScaleFactor2D = geometry.ScaleFactor2D;
 
-const memory = @import("memory.zig");
+const memory = @import("memory");
 const FixedBuffer = memory.FixedBuffer;
+
+const constants = @import("constants");
+const ScreenNormalizedBaseType = constants.ScreenNormalizedBaseType;
 
 pub const InputEventType = enum(u8) { none, mouse_button_left_press, mouse_button_left_release, mouse_button_right_press, mouse_button_right_release, mouse_hover_enter, mouse_hover_exit, mouse_hover_reflexive_enter, mouse_hover_reflexive_exit };
 
@@ -34,10 +37,6 @@ pub const EventFlagsOnMouseBounds = packed struct {
     is_clicked_triggered: bool = false,
 };
 
-test "EventFlagsOnMouseHover" {
-    expect(@sizeOf(EventFlagsOnMouseHover) == 8);
-}
-
 pub const EventFlags = packed union {
     mouse_bounds: EventFlagsOnMouseBounds,
 };
@@ -49,7 +48,7 @@ pub const Event = packed struct {
 
 var registered_events: FixedBuffer(Event, 50) = .{};
 
-const EventAttachmentExtent2D = geometry.Extent2D(.ndc_right);
+const EventAttachmentExtent2D = geometry.Extent2D(ScreenNormalizedBaseType);
 
 var extent_attachments: FixedBuffer(EventAttachmentExtent2D, 40) = .{};
 
@@ -59,21 +58,17 @@ pub fn clearEvents() void {
     current_event_id = 0;
 }
 
-// Source Attachment // Based on property, dimensions, position, color, etc
-// Meta (id, flags)
-// Action
-// Dest Attachment
-
+// TODO: Get rid of this
 var current_event_id: u16 = 0;
 
 pub fn registerMouseHoverReflexiveEnterAction(
-    screen_extent: geometry.Extent2D(.ndc_right),
+    screen_extent: geometry.Extent2D(ScreenNormalizedBaseType),
 ) [2]u16 {
 
     // Seeing as the reflexive event changes between enter and exit,
     // we return two action slots so both events can be handled independently
     const attachment_id = @intCast(u16, extent_attachments.append(screen_extent));
-    const event_id = @intCast(u16, registered_events.append(.{
+    _ = @intCast(u16, registered_events.append(.{
         .event_type = .mouse_hover_reflexive_enter,
         .attachment_id = @intCast(u8, attachment_id),
     }));
@@ -88,7 +83,7 @@ pub fn registerMouseHoverReflexiveEnterAction(
 }
 
 pub fn registerMouseHoverEnterAction(
-    screen_extent: geometry.Extent2D(.ndc_right),
+    screen_extent: geometry.Extent2D(ScreenNormalizedBaseType),
 ) u16 {
     // TODO: Check to see if already added
     const attachment_id = @intCast(u16, extent_attachments.append(screen_extent));
@@ -102,7 +97,7 @@ pub fn registerMouseHoverEnterAction(
 }
 
 pub fn registerMouseHoverExitAction(
-    screen_extent: geometry.Extent2D(.ndc_right),
+    screen_extent: geometry.Extent2D(ScreenNormalizedBaseType),
 ) u16 {
     // TODO: Check to see if already added
     const attachment_id = @intCast(u16, extent_attachments.append(screen_extent));
@@ -115,7 +110,7 @@ pub fn registerMouseHoverExitAction(
 }
 
 pub fn registerMouseLeftPressAction(
-    screen_extent: geometry.Extent2D(.ndc_right),
+    screen_extent: geometry.Extent2D(ScreenNormalizedBaseType),
 ) u16 {
     // TODO: Check to see if already added
     const attachment_id = @intCast(u16, extent_attachments.append(screen_extent));
@@ -126,12 +121,6 @@ pub fn registerMouseLeftPressAction(
     current_event_id += 1;
     return current_event_id - 1;
 }
-// Division criteria
-// Big / Small
-// Static / Dynamic
-// [small_static, big_static, small_dynamic, big_dynamic]
-
-pub const EventID = u16;
 
 pub const MouseButtonState = struct {
     is_left_pressed: bool,
@@ -140,7 +129,7 @@ pub const MouseButtonState = struct {
 
 // TODO: This should just take a pre-allocated buffer
 // TODO: Fix double event trigger from left click
-pub fn eventsFromMouseUpdate(comptime max_events: u32, position: geometry.Coordinates2D(.ndc_right), button_state: MouseButtonState) FixedBuffer(u16, max_events) {
+pub fn eventsFromMouseUpdate(comptime max_events: u32, position: geometry.Coordinates2D(ScreenNormalizedBaseType), button_state: MouseButtonState) FixedBuffer(u16, max_events) {
 
     // TODO: Check this before calling function to save a wasted jump
     // You can keep track of this value client side probably
@@ -165,27 +154,23 @@ pub fn eventsFromMouseUpdate(comptime max_events: u32, position: geometry.Coordi
             .mouse_hover_enter => {
                 if (is_within_extent) {
                     _ = triggered_events.append(@intCast(u16, event_id));
-                    // log.info("Mouse hover enter triggered", .{});
                 }
             },
             .mouse_hover_exit => {
                 if (!is_within_extent) {
                     _ = triggered_events.append(@intCast(u16, event_id));
-                    // log.info("Mouse hover exit triggered", .{});
                 }
             },
             .mouse_hover_reflexive_enter => {
                 if (is_within_extent) {
                     _ = triggered_events.append(@intCast(u16, event_id));
                     registered_event.event_type = .mouse_hover_reflexive_exit;
-                    // log.info("Reflexive enter triggered", .{});
                 }
             },
             .mouse_hover_reflexive_exit => {
                 if (!is_within_extent) {
                     _ = triggered_events.append(@intCast(u16, event_id + 1));
                     registered_event.event_type = .mouse_hover_reflexive_enter;
-                    // log.info("Reflexive exit triggered", .{});
                 }
             },
             else => {},

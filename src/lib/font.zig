@@ -18,7 +18,7 @@ const geometry = @import("geometry.zig");
 const Scale2D = geometry.Scale2D;
 const Shift2D = geometry.Shift2D;
 
-pub fn getCodepointBitmap(allocator: *Allocator, info: FontInfo, scale: Scale2D(f32), codepoint: i32) !Bitmap {
+pub fn getCodepointBitmap(allocator: Allocator, info: FontInfo, scale: Scale2D(f32), codepoint: i32) !Bitmap {
     const shift = Shift2D(f32){ .x = 0.0, .y = 0.0 };
     const offset = Offset2D(u32){ .x = 0, .y = 0 };
     return try getCodepointBitmapSubpixel(allocator, info, scale, shift, codepoint, offset);
@@ -153,8 +153,7 @@ const Bitmap = struct {
     pixels: []u8,
 };
 
-//
-const coordinate_types: []u8;
+const coordinate_types: []u8 = undefined;
 const coordinates = []Point(i16);
 const control_points = []Point(i16);
 
@@ -299,21 +298,21 @@ const GlyhHeader = packed struct {
 //      Simple Glyph Table
 //
 
-const SimpleGlyphTable = packed struct {
-    // Array of point indices for the last point of each contour, in increasing numeric order.
-    end_points_of_contours: [contour_count]u16,
-    instruction_length: u16,
-    instructions: [instruction_length]u8,
-    flags: [*]u8,
-    // Contour point x-coordinates.
-    // Coordinate for the first point is relative to (0,0); others are relative to previous point.
-    x_coordinates: [*]u8,
-    // Contour point y-coordinates.
-    // Coordinate for the first point is relative to (0,0); others are relative to previous point.
-    y_coordinates: [*]u8,
-};
+// const SimpleGlyphTable = packed struct {
+// // Array of point indices for the last point of each contour, in increasing numeric order.
+// end_points_of_contours: [contour_count]u16,
+// instruction_length: u16,
+// instructions: [instruction_length]u8,
+// flags: [*]u8,
+// // Contour point x-coordinates.
+// // Coordinate for the first point is relative to (0,0); others are relative to previous point.
+// x_coordinates: [*]u8,
+// // Contour point y-coordinates.
+// // Coordinate for the first point is relative to (0,0); others are relative to previous point.
+// y_coordinates: [*]u8,
+// };
 
-fn getGlyphShape(allocator: *Allocator, info: FontInfo, glyph_index: i32) ![]Vertex {
+fn getGlyphShape(allocator: Allocator, info: FontInfo, glyph_index: i32) ![]Vertex {
 
     // After Glyph Header is the following structure
     // See: https://docs.microsoft.com/en-us/typography/opentype/spec/glyf
@@ -568,7 +567,7 @@ fn getCodepointBitmapBoxSubpixel(info: FontInfo, codepoint: i32, scale: Scale2D(
     return try getGlyphBitmapBoxSubpixel(info, glyph_index, scale, shift);
 }
 
-fn getCodepointBitmapSubpixel(allocator: *Allocator, info: FontInfo, scale: Scale2D(f32), shift: Shift2D(f32), codepoint: i32, offset: Offset2D(u32)) !Bitmap {
+fn getCodepointBitmapSubpixel(allocator: Allocator, info: FontInfo, scale: Scale2D(f32), shift: Shift2D(f32), codepoint: i32, offset: Offset2D(u32)) !Bitmap {
     const glyph_index: i32 = @intCast(i32, findGlyphIndex(info, codepoint));
     return try getGlyphBitmapSubpixel(allocator, info, scale, shift, glyph_index, offset);
 }
@@ -619,7 +618,10 @@ fn Offset2D(comptime T: type) type {
     };
 }
 
-fn getGlyphBitmapSubpixel(allocator: *Allocator, info: FontInfo, desired_scale: Scale2D(f32), shift: Shift2D(f32), glyph_index: i32, offset: Offset2D(u32)) !Bitmap {
+fn getGlyphBitmapSubpixel(allocator: Allocator, info: FontInfo, desired_scale: Scale2D(f32), shift: Shift2D(f32), glyph_index: i32, offset: Offset2D(u32)) !Bitmap {
+    _ = shift;
+    _ = offset;
+
     var scale = desired_scale;
 
     var bitmap: Bitmap = undefined;
@@ -746,7 +748,7 @@ fn tessellateCubic(points: *[]Point(f32), x0: f32, y0: f32, x1: f32, y1: f32, x2
 
 fn calculatePointsCount(vertices: []Vertex) u32 {
     var count: u32 = 0;
-    for (vertices) |vertex, i| {
+    for (vertices) |vertex| {
         if (vertex.kind == VMove.move or vertex.kind == VMove.line) {
             count += 1;
         } else if (vertex.kind == VMove.curve) {
@@ -759,11 +761,11 @@ fn calculatePointsCount(vertices: []Vertex) u32 {
     }
 }
 
-fn flattenCurves(allocator: *Allocator, vertices: []Vertex, objspace_flatness: f32, contour_lengths: *[]i32, windings: *u32) ![]Point(f32) {
+fn flattenCurves(allocator: Allocator, vertices: []Vertex, objspace_flatness: f32, contour_lengths: *[]i32, windings: *u32) ![]Point(f32) {
     const objspace_flatness_squared: f32 = objspace_flatness * objspace_flatness;
 
     var move_count: usize = 0;
-    for (vertices) |vertex, i| {
+    for (vertices) |vertex| {
         if (vertex.kind == @enumToInt(VMove.move)) {
             move_count += 1;
         }
@@ -785,7 +787,7 @@ fn flattenCurves(allocator: *Allocator, vertices: []Vertex, objspace_flatness: f
     var y: f32 = 0;
     points_count = 0;
     var n: i32 = -1;
-    for (vertices) |vertex, i| {
+    for (vertices) |vertex| {
         switch (vertex.kind) {
             @enumToInt(VMove.move) => {
                 if (n >= 0) {
@@ -863,7 +865,7 @@ fn printEdges(edges: []const Edge) void {
     }
 }
 
-fn rasterize(allocator: *Allocator, flatness_in_pixels: f32, dimensions: Dimensions2D(i32), vertices: []Vertex, scale: Scale2D(f32), shift: Shift2D(f32), offset: Offset2D(i32), invert: bool) !Bitmap {
+fn rasterize(allocator: Allocator, flatness_in_pixels: f32, dimensions: Dimensions2D(i32), vertices: []Vertex, scale: Scale2D(f32), shift: Shift2D(f32), offset: Offset2D(i32), invert: bool) !Bitmap {
     const scale_min = if (scale.x > scale.y) scale.y else scale.x;
     var winding_lengths: []i32 = undefined;
 
@@ -1021,7 +1023,7 @@ fn newActiveEdge(edge: Edge, off_x: i32, start_point: f32) ActiveEdge {
     return active_edge;
 }
 
-fn rasterizeSortedEdges(allocator: *Allocator, edges: []Edge, dimensions: Dimensions2D(i32), offset: Offset2D(i32)) !Bitmap {
+fn rasterizeSortedEdges(allocator: Allocator, edges: []Edge, dimensions: Dimensions2D(i32), offset: Offset2D(i32)) !Bitmap {
     assert(dimensions.width <= 64);
     assert(edges.len > 0);
 
@@ -1036,8 +1038,8 @@ fn rasterizeSortedEdges(allocator: *Allocator, edges: []Edge, dimensions: Dimens
         .edges = undefined,
     };
 
-    var active_edge_index: u32 = 0;
-    var active: ?*ActiveEdge = null;
+    // var active_edge_index: u32 = 0;
+    // var active: ?*ActiveEdge = null;
 
     var bitmap: Bitmap = .{
         .width = @intCast(u32, dimensions.width),
@@ -1070,8 +1072,8 @@ fn rasterizeSortedEdges(allocator: *Allocator, edges: []Edge, dimensions: Dimens
         const scan_y_top: f32 = @intToFloat(f32, y) + 0.0;
         const scan_y_bottom: f32 = @intToFloat(f32, y) + 1.0;
 
-        var step_index: ?u32 = null;
-        var step: ?ActiveEdge = null;
+        // var step_index: ?u32 = null;
+        // var step: ?ActiveEdge = null;
 
         @memset(@ptrCast([*]u8, &scanline), 0, 129 * @sizeOf(f32));
 
@@ -1432,7 +1434,7 @@ const Head = packed struct {
 
 const cff_magic_number: u32 = 0x5F0F3CF5;
 
-const PlatformID = enum { unicode = 0, max = 1, iso = 2, microsoft = 3 };
+const PlatformID = enum(u8) { unicode = 0, max = 1, iso = 2, microsoft = 3 };
 
 const CmapIndex = struct {
     version: u16,
@@ -1531,9 +1533,11 @@ const CMAPFormat2 = struct {
     language: u16,
 };
 
-pub fn initializeFont(allocator: *Allocator, data: [*]u8) !FontInfo {
+pub fn initializeFont(allocator: Allocator, data: [*]u8) !FontInfo {
+    _ = allocator;
+
     var cmap: u32 = 0;
-    var t: u32 = 0;
+    // var t: u32 = 0;
 
     var font_info: FontInfo = .{
         .data = data[0..10],
@@ -1677,6 +1681,7 @@ pub fn initializeFont(allocator: *Allocator, data: [*]u8) !FontInfo {
     };
 
     const encoding_format: u16 = toNative(u16, @intToPtr(*u16, @ptrToInt(data) + font_info.cmap_encoding_table_offset).*, .Big);
+    _ = encoding_format;
 
     // Load CFF
 

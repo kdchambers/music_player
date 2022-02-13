@@ -8,15 +8,22 @@ const Allocator = std.mem.Allocator;
 const assert = std.debug.assert;
 const log = std.log;
 
-const geometry = @import("geometry.zig");
+const geometry = @import("geometry");
 const ScaleFactor2D = geometry.ScaleFactor2D;
-const graphics = @import("graphics.zig");
+const graphics = @import("graphics");
 const QuadFace = graphics.QuadFace;
-const text = @import("text.zig");
-const util = @import("utility.zig");
+const text = @import("text");
+const util = @import("utility");
 const RGBA = graphics.RGBA;
 
-const event_system = @import("event_system.zig");
+// TODO
+const constants = @import("constants");
+
+const TextureNormalizedBaseType = constants.TextureNormalizedBaseType;
+const TexturePixelBaseType = constants.TexturePixelBaseType;
+const ScreenNormalizedBaseType = constants.ScreenNormalizedBaseType;
+
+const event_system = @import("event_system");
 
 var next_widget_id: u32 = 0;
 
@@ -35,11 +42,56 @@ fn nextWidgetId() u32 {
 }
 
 pub const Context = struct {
-    allocator: *Allocator,
+    allocator: Allocator,
     vertices_count: u32,
 };
 
 pub const Alignment = enum { left, right, center };
+
+pub const grid = struct {
+    pub fn generate(
+        comptime VertexType: type,
+        allocator: Allocator,
+        extent: geometry.Extent2D(ScreenNormalizedBaseType),
+        color: RGBA(f32),
+        layout: geometry.Dimensions2D(ScreenNormalizedBaseType),
+        line_width: f32,
+    ) ![]QuadFace(VertexType) {
+        const x_increment_scaled: f32 = extent.width / @intToFloat(f32, layout.width);
+        const y_increment_scaled: f32 = extent.height / @intToFloat(f32, layout.height);
+
+        assert(layout.height > 0);
+        assert(layout.width > 0);
+
+        var faces = try allocator.alloc(QuadFace(VertexType), layout.height + layout.width - 2);
+
+        var y: u32 = 0;
+        while (y < (layout.height - 1)) : (y += 1) {
+            const line_extent = geometry.Extent2D(ScreenNormalizedBaseType){
+                .y = extent.y - (y_increment_scaled * @intToFloat(f32, y + 1)),
+                .x = extent.x,
+                .width = extent.width,
+                .height = line_width,
+            };
+
+            faces[y] = graphics.generateQuadColored(VertexType, line_extent, color);
+        }
+
+        var x: u32 = 0;
+        while (x < (layout.width - 1)) : (x += 1) {
+            const line_extent = geometry.Extent2D(ScreenNormalizedBaseType){
+                .y = extent.y,
+                .x = extent.x + (x_increment_scaled * @intToFloat(f32, x + 1)),
+                .width = line_width,
+                .height = extent.height,
+            };
+
+            faces[layout.height - 1 + x] = graphics.generateQuadColored(VertexType, line_extent, color);
+        }
+
+        return faces;
+    }
+};
 
 pub const button = struct {
     pub const face_count: u32 = 1;
@@ -48,14 +100,15 @@ pub const button = struct {
     // TODO: Don't hardcode non-center alignment, maybe split function
     pub fn generate(
         comptime VertexType: type,
-        allocator: *Allocator,
+        allocator: Allocator,
         glyph_set: text.GlyphSet,
         label: []const u8,
-        extent: geometry.Extent2D(.ndc_right),
-        scale_factor: ScaleFactor2D,
+        extent: geometry.Extent2D(ScreenNormalizedBaseType),
+        scale_factor: ScaleFactor2D(f32),
         color: RGBA(f32),
         label_color: RGBA(f32),
         text_alignment: Alignment,
+        texture_dimensions: geometry.Dimensions2D(TexturePixelBaseType),
     ) ![]QuadFace(VertexType) {
 
         // TODO: Implement right align
@@ -81,12 +134,12 @@ pub const button = struct {
 
         const vertical_margin = (extent.height - label_dimensions.height) / 2;
 
-        const label_origin = geometry.Coordinates2D(.ndc_right){
+        const label_origin = geometry.Coordinates2D(ScreenNormalizedBaseType){
             .x = extent.x + horizontal_margin,
             .y = extent.y - vertical_margin,
         };
 
-        const label_faces = try generateText(VertexType, allocator, label, label_origin, scale_factor, glyph_set, label_color, null);
+        const label_faces = try generateText(VertexType, allocator, label, label_origin, scale_factor, glyph_set, label_color, null, texture_dimensions);
 
         // Memory for background_face and label_face should be contigious
         assert(@ptrToInt(background_face) == @ptrToInt(label_faces.ptr) - @sizeOf(QuadFace(VertexType)));
@@ -107,9 +160,9 @@ pub const button = struct {
 pub const image = struct {
     pub fn generate(
         comptime VertexType: type,
-        allocator: *Allocator,
+        allocator: Allocator,
         image_id: f32,
-        extent: geometry.Extent2D(.ndc_right),
+        extent: geometry.Extent2D(ScreenNormalizedBaseType),
     ) ![]QuadFace(VertexType) {
         assert(image_id == 1 or image_id == 2);
         var image_faces = try allocator.alloc(QuadFace(VertexType), 1);
@@ -181,11 +234,11 @@ pub const image = struct {
 pub fn calculateRenderedTextDimensions(
     text_buffer: []const u8,
     glyph_set: text.GlyphSet,
-    scale_factor: ScaleFactor2D,
+    scale_factor: ScaleFactor2D(f32),
     line_height: f32,
     space_width: f32,
-) !geometry.Dimensions2D(.ndc_right) {
-    var dimensions = geometry.Dimensions2D(.ndc_right){
+) !geometry.Dimensions2D(ScreenNormalizedBaseType) {
+    var dimensions = geometry.Dimensions2D(ScreenNormalizedBaseType){
         .width = 0,
         .height = 0,
     };
@@ -231,13 +284,14 @@ pub fn calculateRenderedTextDimensions(
 // TODO: Audit
 pub fn generateText(
     comptime VertexType: type,
-    face_allocator: *Allocator,
+    face_allocator: Allocator,
     text_buffer: []const u8,
-    origin: geometry.Coordinates2D(.ndc_right),
-    scale_factor: ScaleFactor2D,
+    origin: geometry.Coordinates2D(ScreenNormalizedBaseType),
+    scale_factor: ScaleFactor2D(f32),
     glyph_set: text.GlyphSet,
     color: RGBA(f32),
     line_height_opt: ?f32,
+    texture_dimensions: geometry.Dimensions2D(TexturePixelBaseType),
 ) ![]QuadFace(VertexType) {
     const glyph_length: u32 = blk: {
         var i: u32 = 0;
@@ -250,7 +304,7 @@ pub fn generateText(
     };
 
     var vertices = try face_allocator.alloc(QuadFace(VertexType), glyph_length);
-    var cursor = geometry.Coordinates2D(.carthesian){ .x = 0, .y = 0 };
+    var cursor = geometry.Coordinates2D(u16){ .x = 0, .y = 0 };
     var skipped_count: u32 = 0;
     const line_height: f32 = if (line_height_opt != null) line_height_opt.? else 0;
 
@@ -270,29 +324,39 @@ pub fn generateText(
             continue;
         }
 
+        if (char == 0 or char == 255 or char == 254) {
+            skipped_count += 1;
+            continue;
+        }
+
         if (char != ' ') {
             const glyph_index = blk: {
+                var default_char_index: usize = 0;
                 for (glyph_set.character_list) |c, x| {
                     if (c == char) {
                         break :blk x;
                     }
+                    if (c == '?') {
+                        default_char_index = x;
+                    }
                 }
                 log.err("Charactor not in set '{c}' (ascii {d}) in '{s}'", .{ char, char, text_buffer });
-                return error.InvalidCharacter;
+                break :blk default_char_index;
+                // return error.InvalidCharacter;
             };
 
-            const texture_extent = try glyph_set.imageRegionForGlyph(glyph_index);
+            const texture_extent = try glyph_set.imageRegionForGlyph(glyph_index, texture_dimensions);
             const glyph_dimensions = glyph_set.glyph_information[glyph_index].dimensions;
 
             // Positive offset (Glyphs with a descent get shift down)
             const y_offset = @intToFloat(f32, glyph_set.glyph_information[glyph_index].vertical_offset) * scale_factor.vertical;
 
-            const placement = geometry.Coordinates2D(.ndc_right){
+            const placement = geometry.Coordinates2D(ScreenNormalizedBaseType){
                 .x = origin.x + x_increment,
                 .y = origin.y + y_offset + (line_height * @intToFloat(f32, cursor.y)),
             };
 
-            const char_extent = geometry.Dimensions2D(.ndc_right){
+            const char_extent = geometry.Dimensions2D(ScreenNormalizedBaseType){
                 .width = @intToFloat(f32, glyph_dimensions.width) * scale_factor.horizontal,
                 .height = @intToFloat(f32, glyph_dimensions.height) * scale_factor.vertical,
             };
@@ -314,7 +378,7 @@ pub fn generateText(
     return vertices;
 }
 
-pub fn generateLineMargin(comptime VertexType: type, allocator: *Allocator, glyph_set: text.GlyphSet, coordinates: geometry.Coordinates2D(.ndc_right), scale_factor: ScaleFactor2D, line_start: u16, line_count: u16, line_height: f32) ![]QuadFace(VertexType) {
+pub fn generateLineMargin(comptime VertexType: type, allocator: Allocator, glyph_set: text.GlyphSet, coordinates: geometry.Coordinates2D(ScreenNormalizedBaseType), scale_factor: ScaleFactor2D(f32), line_start: u16, line_count: u16, line_height: f32, texture_dimensions: geometry.Dimensions2D(TextureNormalizedBaseType)) ![]QuadFace(VertexType) {
 
     // Loop through lines to calculate how many vertices will be required
     const quads_required_count = blk: {
@@ -356,19 +420,19 @@ pub fn generateLineMargin(comptime VertexType: type, allocator: *Allocator, glyp
                 return error.CharacterNotInSet;
             };
 
-            const texture_extent = try glyph_set.imageRegionForGlyph(glyph_index);
+            const texture_extent = try glyph_set.imageRegionForGlyph(glyph_index, texture_dimensions);
 
             const glyph_dimensions = glyph_set.glyph_information[glyph_index].dimensions;
             const base_x_increment = (@intToFloat(f32, glyph_set.glyph_information[glyph_index].advance) / 64.0) * scale_factor.horizontal;
 
             const x_increment = (base_x_increment * @intToFloat(f32, chars_wide_count - 1 - digit_index));
 
-            const origin: geometry.Coordinates2D(.ndc_right) = .{
+            const origin: geometry.Coordinates2D(ScreenNormalizedBaseType) = .{
                 .x = coordinates.x + x_increment,
                 .y = coordinates.y + (line_height * @intToFloat(f32, i - 1)),
             };
 
-            const char_extent = geometry.Dimensions2D(.ndc_right){
+            const char_extent = geometry.Dimensions2D(ScreenNormalizedBaseType){
                 .width = @intToFloat(f32, glyph_dimensions.width) * scale_factor.horizontal,
                 .height = @intToFloat(f32, glyph_dimensions.height) * scale_factor.vertical,
             };

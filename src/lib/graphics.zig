@@ -6,6 +6,10 @@
 const geometry = @import("geometry.zig");
 const ScaleFactor2D = geometry.ScaleFactor2D;
 
+const constants = @import("constants");
+const TextureNormalizedBaseType = constants.TextureNormalizedBaseType;
+const ScreenNormalizedBaseType = constants.ScreenNormalizedBaseType;
+
 // TODO: Should not be FaceQuad? To namespace sub types under 'Face'
 pub fn TriFace(comptime VertexType: type) type {
     return [3]VertexType;
@@ -47,7 +51,7 @@ pub fn Color(comptime Type: type) type {
     };
 }
 
-pub fn generateTexturedQuad(comptime VertexType: type, placement: geometry.Coordinates2D(.ndc_right), dimensions: geometry.Dimensions2D(.ndc_right), texture_extent: geometry.Extent2D(.normalized)) QuadFace(VertexType) {
+pub fn generateTexturedQuad(comptime VertexType: type, placement: geometry.Coordinates2D(ScreenNormalizedBaseType), dimensions: geometry.Dimensions2D(ScreenNormalizedBaseType), texture_extent: geometry.Extent2D(TextureNormalizedBaseType)) QuadFace(VertexType) {
     return [_]VertexType{
         .{
             // Top Left
@@ -80,7 +84,7 @@ pub fn generateTexturedQuad(comptime VertexType: type, placement: geometry.Coord
     };
 }
 
-pub fn generateQuadColored(comptime VertexType: type, extent: geometry.Extent2D(.ndc_right), quad_color: RGBA(f32)) QuadFace(VertexType) {
+pub fn generateQuadColored(comptime VertexType: type, extent: geometry.Extent2D(ScreenNormalizedBaseType), quad_color: RGBA(f32)) QuadFace(VertexType) {
     return [_]VertexType{
         .{
             // Top Left
@@ -110,7 +114,7 @@ pub fn generateQuadColored(comptime VertexType: type, extent: geometry.Extent2D(
 }
 
 // TODO: Rotation
-pub fn generateTriangleColored(comptime VertexType: type, extent: geometry.Extent2D(.ndc_right), quad_color: RGBA(f32)) QuadFace(VertexType) {
+pub fn generateTriangleColored(comptime VertexType: type, extent: geometry.Extent2D(ScreenNormalizedBaseType), quad_color: RGBA(f32)) QuadFace(VertexType) {
     return [_]VertexType{
         .{
             // Top Left
