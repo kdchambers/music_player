@@ -3,12 +3,27 @@
 // This program is free software: you can redistribute it and/or modify it under the terms
 // of the GNU General Public License as published by the Free Software Foundation, version 3.
 
+const std = @import("std");
 const geometry = @import("geometry.zig");
 const ScaleFactor2D = geometry.ScaleFactor2D;
 
-const constants = @import("constants");
-const TextureNormalizedBaseType = constants.TextureNormalizedBaseType;
-const ScreenNormalizedBaseType = constants.ScreenNormalizedBaseType;
+// TODO: Color channel hard coded to 9.0 both here and in shader
+pub const GenericVertex = packed struct {
+    x: f32 = 0.0,
+    y: f32 = 0.0,
+    tx: f32 = 9.0,
+    ty: f32 = 9.0,
+    color: RGBA(f32) = .{
+        .r = 1.0,
+        .g = 1.0,
+        .b = 1.0,
+        .a = 0.0,
+    },
+
+    pub fn nullFace() QuadFace(GenericVertex) {
+        return .{ .{}, .{}, .{}, .{} };
+    }
+};
 
 // TODO: Should not be FaceQuad? To namespace sub types under 'Face'
 pub fn TriFace(comptime VertexType: type) type {
@@ -51,7 +66,24 @@ pub fn Color(comptime Type: type) type {
     };
 }
 
-pub fn generateTexturedQuad(comptime VertexType: type, placement: geometry.Coordinates2D(ScreenNormalizedBaseType), dimensions: geometry.Dimensions2D(ScreenNormalizedBaseType), texture_extent: geometry.Extent2D(TextureNormalizedBaseType)) QuadFace(VertexType) {
+fn TypeOfField(t: anytype, field_name: []const u8) type {
+    for (@typeInfo(t).Struct.fields) |field| {
+        if (std.mem.eql(u8, field.name, field_name)) {
+            return field.field_type;
+        }
+    }
+    unreachable;
+}
+
+pub fn generateTexturedQuad(
+    comptime VertexType: type,
+    placement: geometry.Coordinates2D(TypeOfField(VertexType, "x")),
+    dimensions: geometry.Dimensions2D(TypeOfField(VertexType, "x")),
+    texture_extent: geometry.Extent2D(TypeOfField(VertexType, "tx")),
+) QuadFace(VertexType) {
+    std.debug.assert(TypeOfField(VertexType, "x") == TypeOfField(VertexType, "y"));
+    std.debug.assert(TypeOfField(VertexType, "tx") == TypeOfField(VertexType, "ty"));
+
     return [_]VertexType{
         .{
             // Top Left
@@ -84,7 +116,9 @@ pub fn generateTexturedQuad(comptime VertexType: type, placement: geometry.Coord
     };
 }
 
-pub fn generateQuadColored(comptime VertexType: type, extent: geometry.Extent2D(ScreenNormalizedBaseType), quad_color: RGBA(f32)) QuadFace(VertexType) {
+pub fn generateQuadColored(comptime VertexType: type, extent: geometry.Extent2D(TypeOfField(VertexType, "x")), quad_color: RGBA(f32)) QuadFace(VertexType) {
+    std.debug.assert(TypeOfField(VertexType, "x") == TypeOfField(VertexType, "y"));
+
     return [_]VertexType{
         .{
             // Top Left
@@ -114,7 +148,9 @@ pub fn generateQuadColored(comptime VertexType: type, extent: geometry.Extent2D(
 }
 
 // TODO: Rotation
-pub fn generateTriangleColored(comptime VertexType: type, extent: geometry.Extent2D(ScreenNormalizedBaseType), quad_color: RGBA(f32)) QuadFace(VertexType) {
+pub fn generateTriangleColored(comptime VertexType: type, extent: geometry.Extent2D(TypeOfField(VertexType, "x")), quad_color: RGBA(f32)) QuadFace(VertexType) {
+    std.debug.assert(TypeOfField(VertexType, "x") == TypeOfField(VertexType, "y"));
+
     return [_]VertexType{
         .{
             // Top Left

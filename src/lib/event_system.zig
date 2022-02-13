@@ -6,8 +6,7 @@ const Allocator = std.mem.Allocator;
 const graphics = @import("graphics");
 const RGBA = graphics.RGBA;
 const QuadFace = graphics.QuadFace;
-const text = @import("text");
-const GenericVertex = text.GenericVertex;
+const GenericVertex = graphics.GenericVertex;
 const geometry = @import("geometry");
 const ScaleFactor2D = geometry.ScaleFactor2D;
 

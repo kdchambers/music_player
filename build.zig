@@ -18,19 +18,12 @@ pub fn build(b: *Builder) void {
     const lib_src_path = "src/lib/";
     const app_src_path = "src/app/";
 
-    const exe = b.addExecutable("music_player", app_src_path ++ "core.zig");
+    const exe = b.addExecutable("music_player", app_src_path ++ "main.zig");
     exe.setTarget(target);
     exe.setBuildMode(mode);
 
     exe.addIncludeDir("/usr/include/");
     exe.addIncludeDir("/usr/local/include");
-
-    // TODO: Library layer should not depend on application layer
-    //       Add a comptime and remove dependency
-    const constants_pkg = std.build.Pkg{
-        .name = "constants",
-        .path = .{ .path = app_src_path ++ "constants.zig" },
-    };
 
     const geometry_pkg = std.build.Pkg{
         .name = "geometry",
@@ -68,7 +61,15 @@ pub fn build(b: *Builder) void {
         .path = .{
             .path = lib_src_path ++ "graphics.zig",
         },
-        .dependencies = &[_]Pkg{ geometry_pkg, constants_pkg },
+        .dependencies = &[_]Pkg{geometry_pkg},
+    };
+
+    // TODO: Library layer should not depend on application layer
+    //       Add a comptime and remove dependency
+    const constants_pkg = std.build.Pkg{
+        .name = "constants",
+        .path = .{ .path = app_src_path ++ "constants.zig" },
+        .dependencies = &[_]Pkg{ geometry_pkg, graphics_pkg },
     };
 
     const utility_pkg = std.build.Pkg{
@@ -95,7 +96,7 @@ pub fn build(b: *Builder) void {
         .path = .{
             .path = lib_src_path ++ "event_system.zig",
         },
-        .dependencies = &[_]Pkg{ constants_pkg, geometry_pkg, text_pkg, graphics_pkg, memory_pkg },
+        .dependencies = &[_]Pkg{ constants_pkg, geometry_pkg, graphics_pkg, memory_pkg },
     };
 
     const gen = vkgen.VkGenerateStep.init(b, "deps/vk.xml", "vk.zig");

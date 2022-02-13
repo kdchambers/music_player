@@ -15,11 +15,11 @@ const Allocator = std.mem.Allocator;
 
 const geometry = @import("geometry");
 const graphics = @import("graphics");
-// const gui = @import("gui");
 const font = @import("font");
 
 const Mesh = graphics.Mesh;
 const RGBA = graphics.RGBA;
+const GenericVertex = graphics.GenericVertex;
 const ScaleFactor2D = geometry.ScaleFactor2D;
 const QuadFace = graphics.QuadFace;
 
@@ -35,14 +35,6 @@ const TextureNormalizedBaseType = constants.TextureNormalizedBaseType;
 const Scale2D = geometry.Scale2D;
 // TODO: Remove circ dependency
 const Dimensions2D = font.Dimensions2D;
-
-// TODO: Color channel hard coded to 9.0 both here and in shader
-pub const GenericVertex = packed struct { x: f32 = 0.0, y: f32 = 0.0, tx: f32 = 9.0, ty: f32 = 9.0, color: RGBA(f32) = .{
-    .r = 1.0,
-    .g = 1.0,
-    .b = 1.0,
-    .a = 0.0,
-} };
 
 pub const GlyphMeta = packed struct {
     advance: u16,

@@ -12,12 +12,9 @@ const builtin = @import("builtin");
 const log = std.log;
 const assert = std.debug.assert;
 const Allocator = std.mem.Allocator;
-
 const vk = @import("vulkan");
 const vulkan_config = @import("vulkan_config");
-
 const glfw = @import("glfw");
-
 const text = @import("text");
 const gui = @import("gui");
 const zvk = @import("vulkan_wrapper");
@@ -25,45 +22,21 @@ const geometry = @import("geometry");
 const graphics = @import("graphics");
 const RGBA = graphics.RGBA;
 const Mesh = graphics.Mesh;
-const GenericVertex = text.GenericVertex;
+const GenericVertex = graphics.GenericVertex;
 const QuadFace = graphics.QuadFace;
-
 const constants = @import("constants");
+const texture_layer_dimensions = constants.texture_layer_dimensions;
+const texture_layer_size = constants.texture_layer_size;
 const ScreenPixelBaseType = constants.ScreenPixelBaseType;
 const ScreenNormalizedBaseType = constants.ScreenNormalizedBaseType;
 const TexturePixelBaseType = constants.TexturePixelBaseType;
-
 const event_system = @import("event_system");
-
 const memory = @import("memory");
 const FixedBuffer = memory.FixedBuffer;
-
-const utility = @import("utility");
-
 const audio = @import("audio");
-const font = @import("font");
-const image = @import("image");
 const user_config = @import("user_config");
 
 var is_render_requested: bool = true;
-
-// TODO: Move?
-const null_face: QuadFace(GenericVertex) = .{ .{}, .{}, .{}, .{} };
-
-// Build User Configuration
-const BuildConfig = struct {
-    // zig fmt: off
-    app_name: [:0]const u8 = "music_player",
-    font_size: u16 = 16,
-    font_path: [:0]const u8 = "assets/Hack-Regular.ttf",
-    window_dimensions: geometry.Dimensions2D(ScreenPixelBaseType) = .{
-        .width = 800,
-        .height = 600,
-    }
-    // zig fmt: on
-};
-
-const config: BuildConfig = .{};
 
 const BaseDispatch = vk.BaseWrapper(.{
     .createInstance = true,
@@ -151,7 +124,6 @@ const DeviceDispatch = vk.DeviceWrapper(.{
     .cmdBindDescriptorSets = true,
 });
 
-// Types
 const GraphicsContext = struct {
     base_dispatch: BaseDispatch,
     instance_dispatch: InstanceDispatch,
@@ -642,12 +614,6 @@ fn createFramebuffers(allocator: Allocator, app: GraphicsContext) ![]vk.Framebuf
     return framebuffers;
 }
 
-const texture_layer_dimensions = geometry.Dimensions2D(TexturePixelBaseType){
-    .width = 512,
-    .height = 512,
-};
-const texture_layer_size: usize = @sizeOf(RGBA(f32)) * @intCast(u64, texture_layer_dimensions.width) * texture_layer_dimensions.height;
-
 // Globals
 
 var screen_dimensions = geometry.Dimensions2D(ScreenPixelBaseType){
@@ -813,7 +779,7 @@ pub fn main() !void {
 
     log.info("Initialized", .{});
     glfw.setHint(.client_api, .none);
-    graphics_context.window = try glfw.createWindow(config.window_dimensions, config.app_name);
+    graphics_context.window = try glfw.createWindow(constants.initial_window_dimensions, constants.application_title);
 
     const window_size = glfw.getFramebufferSize(graphics_context.window);
 
@@ -835,9 +801,9 @@ pub fn main() !void {
         .s_type = .instance_create_info,
         .p_application_info = &vk.ApplicationInfo{
             .s_type = .application_info,
-            .p_application_name = config.app_name,
+            .p_application_name = constants.application_title,
             .application_version = vk.makeApiVersion(0, 0, 1, 0),
-            .p_engine_name = config.app_name,
+            .p_engine_name = constants.application_title,
             .engine_version = vk.makeApiVersion(0, 0, 1, 0),
             .api_version = vk.makeApiVersion(1, 2, 0, 0),
             .p_next = null,
@@ -2053,7 +2019,7 @@ fn handleUpdateVertices(allocator: Allocator, action_payload: *ActionPayloadVert
             vertices[loaded_vertex_begin + i] = if (i < alternate_vertex_count)
                 alternate_base_vertex[i]
             else
-                null_face[0];
+                GenericVertex.nullFace()[0];
         }
     }
 
@@ -2766,7 +2732,7 @@ fn update(allocator: Allocator, app: *GraphicsContext) !void {
     var media_button_paused_faces = try face_allocator.alloc(QuadFace(GenericVertex), 2);
 
     media_button_paused_faces[0] = graphics.generateTriangleColored(GenericVertex, media_button_paused_extent, media_button_color);
-    media_button_paused_faces[1] = null_face;
+    media_button_paused_faces[1] = GenericVertex.nullFace();
 
     // Let's add a second left_click event emitter to change the icon
     const media_button_on_left_click_event_id = event_system.registerMouseLeftPressAction(media_button_paused_extent);

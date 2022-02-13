@@ -1580,7 +1580,6 @@ pub fn initializeFont(allocator: Allocator, data: [*]u8) !FontInfo {
 
                     if (eql(u8, valid_tag, table_directory.tag[0..])) {
                         found = true;
-                        log.info("Table entry: '{s}' @ offset {d} length {d}", .{ valid_tag, table_directory.offset, table_directory.length });
                         switch (@intToEnum(TableType, @intCast(u4, valid_tag_i))) {
                             .cmap => {
                                 cmap = table_directory.offset;
