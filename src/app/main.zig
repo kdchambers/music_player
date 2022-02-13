@@ -38,6 +38,8 @@ const user_config = @import("user_config");
 const QuadFaceWriter = gui.QuadFaceWriter;
 const QuadFaceWriterPool = gui.QuadFaceWriterPool;
 
+const theme = @import("Theme.zig").default;
+
 var is_render_requested: bool = true;
 var quad_face_writer_pool: QuadFaceWriterPool(GenericVertex) = undefined;
 
@@ -2410,14 +2412,12 @@ fn renderCurrentTrackDetails(face_writer: *QuadFaceWriter(GenericVertex), scale_
 
         {
             const placement = geometry.Coordinates2D(ScreenNormalizedBaseType){ .x = -0.95, .y = 0.9 };
-            const text_color = RGBA(f32){ .r = 0.1, .g = 0.1, .b = 0.2, .a = 1.0 };
-            _ = try gui.generateText(GenericVertex, face_writer, track_name, placement, scale_factor, glyph_set, text_color, null, texture_layer_dimensions);
+            _ = try gui.generateText(GenericVertex, face_writer, track_name, placement, scale_factor, glyph_set, theme.track_title_text, null, texture_layer_dimensions);
         }
 
         {
             const placement = geometry.Coordinates2D(ScreenNormalizedBaseType){ .x = -0.95, .y = 0.85 };
-            const text_color = RGBA(f32){ .r = 0.1, .g = 0.1, .b = 0.2, .a = 1.0 };
-            _ = try gui.generateText(GenericVertex, face_writer, artist_name, placement, scale_factor, glyph_set, text_color, null, texture_layer_dimensions);
+            _ = try gui.generateText(GenericVertex, face_writer, artist_name, placement, scale_factor, glyph_set, theme.track_artist_text, null, texture_layer_dimensions);
         }
     }
 }
@@ -2457,27 +2457,22 @@ fn update(allocator: Allocator, app: *GraphicsContext) !void {
             .height = 0.2,
         };
 
-        const color = RGBA(f32).fromInt(u8, 120, 120, 120, 255);
-
         var faces = try face_writer.allocate(1);
-        faces[0] = graphics.generateQuadColored(GenericVertex, extent, color);
+        faces[0] = graphics.generateQuadColored(GenericVertex, extent, theme.header_background);
 
         break :blk faces;
     };
     _ = top_header;
 
     const top_header_label = blk: {
-        const label_color = RGBA(f32).fromInt(u8, 20, 20, 20, 255);
-
         const label = "MUSIC PLAYER -- DEMO APPLICATION";
-
         const rendered_label_dimensions = try gui.calculateRenderedTextDimensions(label, glyph_set, scale_factor, 0.0, 4 * scale_factor.horizontal);
         const label_origin = geometry.Coordinates2D(ScreenNormalizedBaseType){
             .x = 0.0 - (rendered_label_dimensions.width / 2.0),
             .y = -0.9 + (rendered_label_dimensions.height / 2.0),
         };
 
-        break :blk try gui.generateText(GenericVertex, &face_writer, label, label_origin, scale_factor, glyph_set, label_color, null, texture_layer_dimensions);
+        break :blk try gui.generateText(GenericVertex, &face_writer, label, label_origin, scale_factor, glyph_set, theme.header_text, null, texture_layer_dimensions);
     };
     _ = top_header_label;
 
@@ -2488,11 +2483,8 @@ fn update(allocator: Allocator, app: *GraphicsContext) !void {
             .width = 2.0,
             .height = 0.3,
         };
-
-        const color = RGBA(f32).fromInt(u8, 120, 120, 120, 255);
-
         var faces = try face_writer.allocate(1);
-        faces[0] = graphics.generateQuadColored(GenericVertex, extent, color);
+        faces[0] = graphics.generateQuadColored(GenericVertex, extent, theme.footer_background);
 
         break :blk faces;
     };
@@ -2508,10 +2500,8 @@ fn update(allocator: Allocator, app: *GraphicsContext) !void {
     };
 
     const audio_progress_bar_background = blk: {
-        const background_color = RGBA(f32).fromInt(u8, 50, 50, 80, 255);
         var faces = try face_writer.allocate(1);
-        faces[0] = graphics.generateQuadColored(GenericVertex, progress_bar_extent, background_color);
-
+        faces[0] = graphics.generateQuadColored(GenericVertex, progress_bar_extent, theme.progress_bar_background);
         break :blk faces;
     };
     _ = audio_progress_bar_background;
@@ -2534,8 +2524,7 @@ fn update(allocator: Allocator, app: *GraphicsContext) !void {
             .height = 6 * scale_factor.vertical,
         };
 
-        const color = RGBA(f32).fromInt(u8, 150, 50, 80, 255);
-        const faces = try generateAudioProgressBar(&face_writer, progress_percentage, color, extent);
+        const faces = try generateAudioProgressBar(&face_writer, progress_percentage, theme.progress_bar_foreground, extent);
         audio_progress_bar_faces_quad_index = calculateQuadIndex(vertices, faces);
 
         log.info("Progress bar index: {d}", .{audio_progress_bar_faces_quad_index});
@@ -2556,16 +2545,21 @@ fn update(allocator: Allocator, app: *GraphicsContext) !void {
             .height = geometry.pixelToNativeDeviceCoordinateRight(button_dimensions.height, scale_factor.vertical),
         };
 
-        const button_color = RGBA(f32){ .r = 0.3, .g = 0.3, .b = 0.5, .a = 1.0 };
-        const label_color = RGBA(f32){ .r = 0.0, .g = 0.0, .b = 0.0, .a = 1.0 };
+        const faces = try gui.button.generate(
+            GenericVertex,
+            &face_writer,
+            glyph_set,
+            "<",
+            button_extent,
+            scale_factor,
+            theme.return_button_background,
+            theme.return_button_foreground,
+            .center,
+            texture_layer_dimensions,
+        );
 
-        const faces = try gui.button.generate(GenericVertex, &face_writer, glyph_set, "<", button_extent, scale_factor, button_color, label_color, .center, texture_layer_dimensions);
-
-        // Register a mouse_hover event that will change the color of the button
-        const on_hover_color = RGBA(f32){ .r = 0.4, .g = 0.4, .b = 0.4, .a = 1.0 };
-
-        const button_color_index = color_list.append(button_color);
-        const on_hover_color_index = color_list.append(on_hover_color);
+        const button_color_index = color_list.append(theme.return_button_background);
+        const on_hover_color_index = color_list.append(theme.return_button_background_hovered);
 
         // Index of the quad face (I.e Mulples of 4 faces) within the face allocator
         const widget_index = calculateQuadIndex(vertices, faces);
@@ -2622,8 +2616,6 @@ fn update(allocator: Allocator, app: *GraphicsContext) !void {
 
     log.info("Rending media button", .{});
 
-    const media_button_color = RGBA(f32){ .r = 0.8, .g = 0.8, .b = 0.8, .a = 1.0 };
-
     const media_button_placement = geometry.Coordinates2D(ScreenNormalizedBaseType){ .x = 0.0, .y = 0.9 };
     const media_button_paused_dimensions = geometry.Dimensions2D(ScreenPixelBaseType){ .width = 20, .height = 20 };
     const media_button_resumed_dimensions = geometry.Dimensions2D(ScreenPixelBaseType){ .width = 4, .height = 15 };
@@ -2656,8 +2648,8 @@ fn update(allocator: Allocator, app: *GraphicsContext) !void {
     };
 
     var playing_icon_faces: [2]QuadFace(GenericVertex) = undefined;
-    playing_icon_faces[0] = graphics.generateQuadColored(GenericVertex, media_button_resumed_left_extent, media_button_color);
-    playing_icon_faces[1] = graphics.generateQuadColored(GenericVertex, media_button_resumed_right_extent, media_button_color);
+    playing_icon_faces[0] = graphics.generateQuadColored(GenericVertex, media_button_resumed_left_extent, theme.media_button);
+    playing_icon_faces[1] = graphics.generateQuadColored(GenericVertex, media_button_resumed_right_extent, theme.media_button);
 
     _ = inactive_vertices_attachments.append(playing_icon_faces[0]);
     _ = inactive_vertices_attachments.append(playing_icon_faces[1]);
@@ -2673,7 +2665,7 @@ fn update(allocator: Allocator, app: *GraphicsContext) !void {
     //       we need to reserve a second for the resumed icon
     var media_button_paused_faces = try face_writer.allocate(2);
 
-    media_button_paused_faces[0] = graphics.generateTriangleColored(GenericVertex, media_button_paused_extent, media_button_color);
+    media_button_paused_faces[0] = graphics.generateTriangleColored(GenericVertex, media_button_paused_extent, theme.media_button);
     media_button_paused_faces[1] = GenericVertex.nullFace();
 
     // Let's add a second left_click event emitter to change the icon
@@ -2745,10 +2737,7 @@ fn update(allocator: Allocator, app: *GraphicsContext) !void {
                 .height = item_height, // geometry.pixelToNativeDeviceCoordinateRight(media_item_dimensions.height, scale_factor.vertical),
             };
 
-            const media_item_background_color = RGBA(f32).fromInt(u8, 50, 50, 40, 255);
-            const media_item_label_color = RGBA(f32){ .r = 1.0, .g = 1.0, .b = 1.0, .a = 1.0 };
-
-            const media_item_faces = try gui.button.generate(GenericVertex, &face_writer, glyph_set, directory_name, media_item_extent, scale_factor, media_item_background_color, media_item_label_color, .center, texture_layer_dimensions);
+            const media_item_faces = try gui.button.generate(GenericVertex, &face_writer, glyph_set, directory_name, media_item_extent, scale_factor, theme.folder_background, theme.folder_text, .center, texture_layer_dimensions);
 
             const media_item_on_left_click_event_id = event_system.registerMouseLeftPressAction(media_item_extent);
 
@@ -2781,10 +2770,18 @@ fn update(allocator: Allocator, app: *GraphicsContext) !void {
                 .height = geometry.pixelToNativeDeviceCoordinateRight(track_item_dimensions.height, scale_factor.vertical),
             };
 
-            const track_item_background_color = user_config.background_color;
-            const track_item_label_color = RGBA(f32){ .r = 1.0, .g = 1.0, .b = 1.0, .a = 1.0 };
-
-            const track_item_faces = try gui.button.generate(GenericVertex, &face_writer, glyph_set, track_name, track_item_extent, scale_factor, track_item_background_color, track_item_label_color, .left, texture_layer_dimensions);
+            const track_item_faces = try gui.button.generate(
+                GenericVertex,
+                &face_writer,
+                glyph_set,
+                track_name,
+                track_item_extent,
+                scale_factor,
+                theme.track_background,
+                theme.track_text,
+                .left,
+                texture_layer_dimensions,
+            );
 
             const track_item_on_left_click_event_id = event_system.registerMouseLeftPressAction(track_item_extent);
 
@@ -2796,11 +2793,8 @@ fn update(allocator: Allocator, app: *GraphicsContext) !void {
             const track_item_audio_play_action = Action{ .action_type = .audio_play, .payload = .{ .audio_play = track_item_audio_play_action_payload } };
             assert(track_item_on_left_click_event_id == system_actions.append(track_item_audio_play_action));
 
-            // Register a mouse_hover event that will change the color of the button
-            const track_item_on_hover_color = RGBA(f32){ .r = 0.1, .g = 0.2, .b = 0.3, .a = 1.0 };
-
-            const track_item_background_color_index = color_list.append(track_item_background_color);
-            const track_item_on_hover_color_index = color_list.append(track_item_on_hover_color);
+            const track_item_background_color_index = color_list.append(theme.track_background);
+            const track_item_on_hover_color_index = color_list.append(theme.track_background_hovered);
 
             // NOTE: system_actions needs to correspond to given on_hover_event_ids here
             const track_item_on_hover_event_ids = event_system.registerMouseHoverReflexiveEnterAction(track_item_extent);
@@ -3192,7 +3186,7 @@ fn recordRenderPass(
     assert(app.screen_dimensions.width == app.swapchain_extent.width);
     assert(app.screen_dimensions.height == app.swapchain_extent.height);
 
-    const clear_color = user_config.background_color;
+    const clear_color = theme.navigation_background;
     const clear_colors = [1]vk.ClearValue{
         vk.ClearValue{
             .color = vk.ClearColorValue{
