@@ -13,7 +13,8 @@ pub fn FixedAtomicEventQueue(comptime T: type, comptime Capacity: usize) type {
         mutex: std.Thread.Mutex = .{},
         count: u16 = 0,
 
-        pub fn add_event(self: *@This(), element: T) !void {
+        /// Called by the producer
+        pub fn add(self: *@This(), element: T) !void {
             self.mutex.lock();
             defer self.mutex.unlock();
 
@@ -26,7 +27,12 @@ pub fn FixedAtomicEventQueue(comptime T: type, comptime Capacity: usize) type {
             self.count += 1;
         }
 
-        pub fn collect_events(self: *@This()) []T {
+        pub fn empty(self: *@This()) bool {
+            return (self.count == 0);
+        }
+
+        /// Called by the consumer
+        pub fn collect(self: *@This()) []T {
             self.mutex.lock();
             defer self.mutex.unlock();
 

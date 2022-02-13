@@ -35,8 +35,11 @@ const memory = @import("memory");
 const FixedBuffer = memory.FixedBuffer;
 const audio = @import("audio");
 const user_config = @import("user_config");
+const QuadFaceWriter = gui.QuadFaceWriter;
+const QuadFaceWriterPool = gui.QuadFaceWriterPool;
 
 var is_render_requested: bool = true;
+var quad_face_writer_pool: QuadFaceWriterPool(GenericVertex) = undefined;
 
 const BaseDispatch = vk.BaseWrapper(.{
     .createInstance = true,
@@ -1671,6 +1674,12 @@ fn setupApplication(allocator: Allocator, app: *GraphicsContext) !void {
 
     mapped_device_memory = @ptrCast([*]u8, (try app.device_dispatch.mapMemory(app.logical_device, mesh_memory, 0, memory_size, .{})).?);
 
+    {
+        const vertices_addr = @ptrCast([*]align(@alignOf(GenericVertex)) u8, &mapped_device_memory[vertices_range_index_begin]);
+        const vertices_quad_size: u32 = vertices_range_size / @sizeOf(GenericVertex);
+        quad_face_writer_pool = QuadFaceWriterPool(GenericVertex).initialize(vertices_addr, vertices_quad_size);
+    }
+
     // if (vk.vkMapMemory(app.logical_device, mesh_memory, 0, memory_size, 0, @ptrCast(**anyopaque, &mapped_device_memory)) != .success) {
     // return error.MapMemoryFailed;
     // }
@@ -2385,73 +2394,6 @@ fn glfwKeyCallback(window: *glfw.Window, key: i32, scancode: i32, action: i32, m
     _ = mods;
 }
 
-const LinearAllocator = struct {
-    //
-};
-
-// TODO: move
-// Allocator wrapper around fixed-size array with linear access pattern
-const FixedBufferAllocator = struct {
-    buffer: [*]u8,
-    capacity: u32,
-    used: u32 = 0,
-
-    const Self = @This();
-
-    pub fn allocator(self: *FixedBufferAllocator) Allocator {
-        return Allocator.init(self, FixedBufferAllocator.alloc, FixedBufferAllocator.resize, FixedBufferAllocator.free);
-    }
-
-    pub fn init(fixed_buffer: [*]u8, length: u32) FixedBufferAllocator {
-        return FixedBufferAllocator{
-            .buffer = fixed_buffer,
-            .capacity = length,
-            .used = 0,
-        };
-    }
-
-    fn alloc(self: *Self, len: usize, ptr_align: u29, len_align: u29, ret_addr: usize) Allocator.Error![]u8 {
-        _ = ret_addr;
-        _ = len_align;
-
-        const aligned_size = std.math.max(len, ptr_align);
-
-        if (aligned_size > (self.capacity - self.used)) return error.OutOfMemory;
-
-        defer self.used += @intCast(u32, aligned_size);
-        return self.buffer[self.used .. self.used + aligned_size];
-    }
-
-    fn resize(
-        self: *Self,
-        old_mem: []u8,
-        old_align: u29,
-        new_size: usize,
-        len_align: u29,
-        ret_addr: usize,
-    ) ?usize {
-        assert(false);
-        _ = old_align;
-        _ = len_align;
-        _ = ret_addr;
-
-        const diff: i32 = (@intCast(i32, old_mem.len) - @intCast(i32, new_size));
-        if (diff < 0) return null; // error.OutOfMemory;
-
-        self.used -= @intCast(u32, diff);
-
-        return new_size;
-    }
-
-    fn free(self: *Self, buf: []u8, buf_align: u29, ret_addr: usize) void {
-        _ = self;
-        _ = buf;
-        _ = buf_align;
-        _ = ret_addr;
-        assert(false);
-    }
-};
-
 fn calculateQuadIndex(base: [*]align(16) GenericVertex, widget_faces: []QuadFace(GenericVertex)) u16 {
     return @intCast(u16, (@ptrToInt(&widget_faces[0]) - @ptrToInt(base)) / @sizeOf(QuadFace(GenericVertex)));
 }
@@ -2459,6 +2401,26 @@ fn calculateQuadIndex(base: [*]align(16) GenericVertex, widget_faces: []QuadFace
 // TODO: move
 var media_button_toggle_audio_action_id: u32 = undefined;
 const parent_directory_id = std.math.maxInt(u16);
+
+fn renderCurrentTrackDetails(face_writer: *QuadFaceWriter(GenericVertex), scale_factor: geometry.ScaleFactor2D(f32)) !void {
+    assert(audio.output.getState() != .stopped);
+    if (audio.output.getState() != .stopped) {
+        const track_name = audio.current_track.title[0..audio.current_track.title_length];
+        const artist_name = audio.current_track.artist[0..audio.current_track.artist_length];
+
+        {
+            const placement = geometry.Coordinates2D(ScreenNormalizedBaseType){ .x = -0.95, .y = 0.9 };
+            const text_color = RGBA(f32){ .r = 0.1, .g = 0.1, .b = 0.2, .a = 1.0 };
+            _ = try gui.generateText(GenericVertex, face_writer, track_name, placement, scale_factor, glyph_set, text_color, null, texture_layer_dimensions);
+        }
+
+        {
+            const placement = geometry.Coordinates2D(ScreenNormalizedBaseType){ .x = -0.95, .y = 0.85 };
+            const text_color = RGBA(f32){ .r = 0.1, .g = 0.1, .b = 0.2, .a = 1.0 };
+            _ = try gui.generateText(GenericVertex, face_writer, artist_name, placement, scale_factor, glyph_set, text_color, null, texture_layer_dimensions);
+        }
+    }
+}
 
 fn update(allocator: Allocator, app: *GraphicsContext) !void {
     _ = app;
@@ -2473,9 +2435,6 @@ fn update(allocator: Allocator, app: *GraphicsContext) !void {
 
     vertex_buffer_count = 0;
 
-    var fixed_buffer_allocator = FixedBufferAllocator.init(@ptrCast([*]u8, vertices), vertices_range_size);
-    var face_allocator = fixed_buffer_allocator.allocator();
-
     const scale_factor = geometry.ScaleFactor2D(f32){
         .horizontal = (2.0 / @intToFloat(f32, screen_dimensions.width)),
         .vertical = (2.0 / @intToFloat(f32, screen_dimensions.height)),
@@ -2488,6 +2447,8 @@ fn update(allocator: Allocator, app: *GraphicsContext) !void {
     vertex_range_attachments.clear();
     inactive_vertices_attachments.clear();
 
+    var face_writer = quad_face_writer_pool.create(0, vertices_range_size / @sizeOf(GenericVertex));
+
     const top_header = blk: {
         const extent = geometry.Extent2D(ScreenNormalizedBaseType){
             .x = -1.0,
@@ -2498,7 +2459,7 @@ fn update(allocator: Allocator, app: *GraphicsContext) !void {
 
         const color = RGBA(f32).fromInt(u8, 120, 120, 120, 255);
 
-        var faces = try face_allocator.alloc(QuadFace(GenericVertex), 1);
+        var faces = try face_writer.allocate(1);
         faces[0] = graphics.generateQuadColored(GenericVertex, extent, color);
 
         break :blk faces;
@@ -2516,7 +2477,7 @@ fn update(allocator: Allocator, app: *GraphicsContext) !void {
             .y = -0.9 + (rendered_label_dimensions.height / 2.0),
         };
 
-        break :blk try gui.generateText(GenericVertex, face_allocator, label, label_origin, scale_factor, glyph_set, label_color, null, texture_layer_dimensions);
+        break :blk try gui.generateText(GenericVertex, &face_writer, label, label_origin, scale_factor, glyph_set, label_color, null, texture_layer_dimensions);
     };
     _ = top_header_label;
 
@@ -2530,7 +2491,7 @@ fn update(allocator: Allocator, app: *GraphicsContext) !void {
 
         const color = RGBA(f32).fromInt(u8, 120, 120, 120, 255);
 
-        var faces = try face_allocator.alloc(QuadFace(GenericVertex), 1);
+        var faces = try face_writer.allocate(1);
         faces[0] = graphics.generateQuadColored(GenericVertex, extent, color);
 
         break :blk faces;
@@ -2548,7 +2509,7 @@ fn update(allocator: Allocator, app: *GraphicsContext) !void {
 
     const audio_progress_bar_background = blk: {
         const background_color = RGBA(f32).fromInt(u8, 50, 50, 80, 255);
-        var faces = try face_allocator.alloc(QuadFace(GenericVertex), 1);
+        var faces = try face_writer.allocate(1);
         faces[0] = graphics.generateQuadColored(GenericVertex, progress_bar_extent, background_color);
 
         break :blk faces;
@@ -2574,33 +2535,14 @@ fn update(allocator: Allocator, app: *GraphicsContext) !void {
         };
 
         const color = RGBA(f32).fromInt(u8, 150, 50, 80, 255);
-        const faces = try generateAudioProgressBar(face_allocator, progress_percentage, color, extent);
+        const faces = try generateAudioProgressBar(&face_writer, progress_percentage, color, extent);
         audio_progress_bar_faces_quad_index = calculateQuadIndex(vertices, faces);
 
         log.info("Progress bar index: {d}", .{audio_progress_bar_faces_quad_index});
     }
 
-    {
-        //
-        // Current track details
-        //
-
-        if (audio.output.getState() != .stopped) {
-            const track_name = audio.current_track.title[0..audio.current_track.title_length];
-            const artist_name = audio.current_track.artist[0..audio.current_track.artist_length];
-
-            {
-                const placement = geometry.Coordinates2D(ScreenNormalizedBaseType){ .x = -0.95, .y = 0.9 };
-                const text_color = RGBA(f32){ .r = 0.1, .g = 0.1, .b = 0.2, .a = 1.0 };
-                _ = try gui.generateText(GenericVertex, face_allocator, track_name, placement, scale_factor, glyph_set, text_color, null, texture_layer_dimensions);
-            }
-
-            {
-                const placement = geometry.Coordinates2D(ScreenNormalizedBaseType){ .x = -0.95, .y = 0.85 };
-                const text_color = RGBA(f32){ .r = 0.1, .g = 0.1, .b = 0.2, .a = 1.0 };
-                _ = try gui.generateText(GenericVertex, face_allocator, artist_name, placement, scale_factor, glyph_set, text_color, null, texture_layer_dimensions);
-            }
-        }
+    if (audio.output.getState() != .stopped) {
+        try renderCurrentTrackDetails(&face_writer, scale_factor);
     }
 
     const return_button = blk: {
@@ -2617,7 +2559,7 @@ fn update(allocator: Allocator, app: *GraphicsContext) !void {
         const button_color = RGBA(f32){ .r = 0.3, .g = 0.3, .b = 0.5, .a = 1.0 };
         const label_color = RGBA(f32){ .r = 0.0, .g = 0.0, .b = 0.0, .a = 1.0 };
 
-        const faces = try gui.button.generate(GenericVertex, face_allocator, glyph_set, "<", button_extent, scale_factor, button_color, label_color, .center, texture_layer_dimensions);
+        const faces = try gui.button.generate(GenericVertex, &face_writer, glyph_set, "<", button_extent, scale_factor, button_color, label_color, .center, texture_layer_dimensions);
 
         // Register a mouse_hover event that will change the color of the button
         const on_hover_color = RGBA(f32){ .r = 0.4, .g = 0.4, .b = 0.4, .a = 1.0 };
@@ -2729,7 +2671,7 @@ fn update(allocator: Allocator, app: *GraphicsContext) !void {
 
     // NOTE: Even though we only need one face to generate a triangle,
     //       we need to reserve a second for the resumed icon
-    var media_button_paused_faces = try face_allocator.alloc(QuadFace(GenericVertex), 2);
+    var media_button_paused_faces = try face_writer.allocate(2);
 
     media_button_paused_faces[0] = graphics.generateTriangleColored(GenericVertex, media_button_paused_extent, media_button_color);
     media_button_paused_faces[1] = GenericVertex.nullFace();
@@ -2806,7 +2748,7 @@ fn update(allocator: Allocator, app: *GraphicsContext) !void {
             const media_item_background_color = RGBA(f32).fromInt(u8, 50, 50, 40, 255);
             const media_item_label_color = RGBA(f32){ .r = 1.0, .g = 1.0, .b = 1.0, .a = 1.0 };
 
-            const media_item_faces = try gui.button.generate(GenericVertex, face_allocator, glyph_set, directory_name, media_item_extent, scale_factor, media_item_background_color, media_item_label_color, .center, texture_layer_dimensions);
+            const media_item_faces = try gui.button.generate(GenericVertex, &face_writer, glyph_set, directory_name, media_item_extent, scale_factor, media_item_background_color, media_item_label_color, .center, texture_layer_dimensions);
 
             const media_item_on_left_click_event_id = event_system.registerMouseLeftPressAction(media_item_extent);
 
@@ -2842,7 +2784,7 @@ fn update(allocator: Allocator, app: *GraphicsContext) !void {
             const track_item_background_color = user_config.background_color;
             const track_item_label_color = RGBA(f32){ .r = 1.0, .g = 1.0, .b = 1.0, .a = 1.0 };
 
-            const track_item_faces = try gui.button.generate(GenericVertex, face_allocator, glyph_set, track_name, track_item_extent, scale_factor, track_item_background_color, track_item_label_color, .left, texture_layer_dimensions);
+            const track_item_faces = try gui.button.generate(GenericVertex, &face_writer, glyph_set, track_name, track_item_extent, scale_factor, track_item_background_color, track_item_label_color, .left, texture_layer_dimensions);
 
             const track_item_on_left_click_event_id = event_system.registerMouseLeftPressAction(track_item_extent);
 
@@ -2890,24 +2832,6 @@ fn update(allocator: Allocator, app: *GraphicsContext) !void {
         }
     }
 
-    // const debug_grid = blk: {
-    // const extent = geometry.Extent2D(ScreenNormalizedBaseType){
-    // .x = -1.0,
-    // .y = 1.0,
-    // .width = 2.0,
-    // .height = 2.0,
-    // };
-
-    // const layout = geometry.Dimensions2D(TexturePixelBaseType){
-    // .width = 12,
-    // .height = 8,
-    // };
-
-    // const line_width: f32 = 1 * scale_factor.horizontal;
-
-    // break :blk try gui.grid.generate(GenericVertex, face_allocator, extent, RGBA(f32).fromInt(u8, 100, 100, 100, 255), layout, line_width);
-    // };
-
     //
     // Duration of audio played
     //
@@ -2918,40 +2842,11 @@ fn update(allocator: Allocator, app: *GraphicsContext) !void {
         //
 
         if (audio.output.getState() != .stopped) {
-            try generateDurationLabels(face_allocator, scale_factor);
-
-            // const track_duration_total = secondsToAudioDurationTime(@intCast(u16, try audio.output.trackLengthSeconds()));
-            // const track_duration_played = secondsToAudioDurationTime(@intCast(u16, try audio.output.secondsPlayed()));
-            // const text_color = RGBA(f32){ .r = 0.8, .g = 0.8, .b = 0.8, .a = 1.0 };
-            // const margin_from_progress_bar: f32 = 0.02;
-            // var buffer: [5]u8 = undefined;
-
-            // //
-            // // Duration Total
-            // //
-
-            // const duration_total_label = try std.fmt.bufPrint(&buffer, "{d:0>2}:{d:0>2}", .{ track_duration_total.minutes, track_duration_total.seconds });
-            // const duration_total_label_placement = geometry.Coordinates2D(ScreenNormalizedBaseType){ .x = progress_bar_extent.x + progress_bar_extent.width + margin_from_progress_bar, .y = progress_bar_extent.y + (progress_bar_extent.height / 2.0) };
-
-            // const duration_total_label_faces = try gui.generateText(GenericVertex, face_allocator, duration_total_label, duration_total_label_placement, scale_factor, glyph_set, text_color, null, texture_layer_dimensions);
-
-            // //
-            // // Duration Played
-            // //
-
-            // const duration_played_label = try std.fmt.bufPrint(&buffer, "{d:0>2}:{d:0>2}", .{ track_duration_played.minutes, track_duration_played.seconds });
-            // const duration_played_label_placement = geometry.Coordinates2D(ScreenNormalizedBaseType){ .x = progress_bar_extent.x - margin_from_progress_bar - 0.08, .y = progress_bar_extent.y + (progress_bar_extent.height / 2.0) };
-            // const duration_played_label_faces = try gui.generateText(GenericVertex, face_allocator, duration_played_label, duration_played_label_placement, scale_factor, glyph_set, text_color, null, texture_layer_dimensions);
-
-            // audio_progress_label_faces_quad_index = calculateQuadIndex(vertices, duration_played_label_faces);
+            try generateDurationLabels(&face_writer, scale_factor);
         }
     }
 
-    //
-    // Hack we can do because face_allocator is fully linear
-    //
-    const terminal_face = try face_allocator.create(GenericVertex);
-    vertex_buffer_count = @intCast(u32, (@ptrToInt(terminal_face) - @ptrToInt(&vertices[0])) / @sizeOf(QuadFace(GenericVertex)));
+    vertex_buffer_count = face_writer.used;
 
     text_buffer_dirty = false;
     is_render_requested = true;
@@ -2959,7 +2854,10 @@ fn update(allocator: Allocator, app: *GraphicsContext) !void {
     log.info("Update completed", .{});
 }
 
-fn generateDurationLabels(face_allocator: Allocator, scale_factor: geometry.ScaleFactor2D(f32)) !void {
+fn generateDurationLabels(face_writer: *QuadFaceWriter(GenericVertex), scale_factor: geometry.ScaleFactor2D(f32)) !void {
+    const quads_required_count: u32 = 10;
+    assert(face_writer.remaining() >= quads_required_count);
+
     //
     // Track Duration Label
     //
@@ -2990,7 +2888,9 @@ fn generateDurationLabels(face_allocator: Allocator, scale_factor: geometry.Scal
     const duration_total_label = try std.fmt.bufPrint(&buffer, "{d:0>2}:{d:0>2}", .{ track_duration_total.minutes, track_duration_total.seconds });
     const duration_total_label_placement = geometry.Coordinates2D(ScreenNormalizedBaseType){ .x = progress_bar_extent.x + progress_bar_extent.width + margin_from_progress_bar, .y = progress_bar_extent.y + (progress_bar_extent.height / 2.0) };
 
-    const duration_total_label_faces = try gui.generateText(GenericVertex, face_allocator, duration_total_label, duration_total_label_placement, scale_factor, glyph_set, text_color, null, texture_layer_dimensions);
+    const duration_total_label_faces = try gui.generateText(GenericVertex, face_writer, duration_total_label, duration_total_label_placement, scale_factor, glyph_set, text_color, null, texture_layer_dimensions);
+
+    assert(duration_total_label_faces.len == 5);
 
     //
     // Duration Played
@@ -2998,16 +2898,23 @@ fn generateDurationLabels(face_allocator: Allocator, scale_factor: geometry.Scal
 
     const duration_played_label = try std.fmt.bufPrint(&buffer, "{d:0>2}:{d:0>2}", .{ track_duration_played.minutes, track_duration_played.seconds });
     const duration_played_label_placement = geometry.Coordinates2D(ScreenNormalizedBaseType){ .x = progress_bar_extent.x - margin_from_progress_bar - 0.08, .y = progress_bar_extent.y + (progress_bar_extent.height / 2.0) };
-    const duration_played_label_faces = try gui.generateText(GenericVertex, face_allocator, duration_played_label, duration_played_label_placement, scale_factor, glyph_set, text_color, null, texture_layer_dimensions);
-    _ = duration_played_label_faces;
+    const duration_played_label_faces = try gui.generateText(GenericVertex, face_writer, duration_played_label, duration_played_label_placement, scale_factor, glyph_set, text_color, null, texture_layer_dimensions);
 
+    assert(duration_played_label_faces.len == 5);
+
+    // TODO
     audio_progress_label_faces_quad_index = calculateQuadIndex(vertices, duration_total_label_faces);
 }
 
 var audio_progress_label_faces_quad_index: u32 = undefined;
 var audio_progress_bar_faces_quad_index: u32 = undefined;
 
-fn generateAudioProgressBar(face_allocator: Allocator, progress: f32, color: RGBA(f32), extent: geometry.Extent2D(ScreenNormalizedBaseType)) ![]QuadFace(GenericVertex) {
+fn generateAudioProgressBar(
+    face_writer: *QuadFaceWriter(GenericVertex),
+    progress: f32,
+    color: RGBA(f32),
+    extent: geometry.Extent2D(ScreenNormalizedBaseType),
+) ![]QuadFace(GenericVertex) {
     assert(progress >= 0.0 and progress <= 1.0);
     const progress_extent = geometry.Extent2D(ScreenNormalizedBaseType){
         .x = extent.x,
@@ -3016,7 +2923,7 @@ fn generateAudioProgressBar(face_allocator: Allocator, progress: f32, color: RGB
         .height = extent.height,
     };
 
-    var faces = try face_allocator.alloc(QuadFace(GenericVertex), 1);
+    var faces = try face_writer.allocate(1);
     faces[0] = graphics.generateQuadColored(GenericVertex, progress_extent, color);
     return faces;
 }
@@ -3043,29 +2950,90 @@ fn secondsToAudioDurationTime(seconds: u16) AudioDuractionTime {
     };
 }
 
-fn updateAudioDurationLabel(current_point_seconds: u32, track_duration_seconds: u32, vertices: []GenericVertex) !void {
-    // Wrap our fixed-size buffer in allocator interface to be generic
+// fn updateAudioDurationLabel(current_point_seconds: u32, track_duration_seconds: u32, vertices: []GenericVertex) !void {
+// // Wrap our fixed-size buffer in allocator interface to be generic
 
-    var fixed_buffer_allocator = FixedBufferAllocator.init(@ptrCast([*]u8, vertices), vertices_range_size);
-    var face_allocator = fixed_buffer_allocator.allocator();
+// var face_writer = quad_face_writer_pool.create(vertices,
 
-    assert(current_point_seconds <= (1 << 16));
+// var fixed_buffer_allocator = FixedBufferAllocator.init(@ptrCast([*]u8, vertices), vertices_range_size);
+// var face_allocator = fixed_buffer_allocator.allocator();
 
-    const track_duration_total = secondsToAudioDurationTime(@intCast(u16, track_duration_seconds));
-    const track_duration_played = secondsToAudioDurationTime(@intCast(u16, current_point_seconds));
+// assert(current_point_seconds <= (1 << 16));
 
+// const track_duration_total = secondsToAudioDurationTime(@intCast(u16, track_duration_seconds));
+// const track_duration_played = secondsToAudioDurationTime(@intCast(u16, current_point_seconds));
+
+// const scale_factor = geometry.ScaleFactor2D(f32){
+// .horizontal = (2.0 / @intToFloat(f32, screen_dimensions.width)),
+// .vertical = (2.0 / @intToFloat(f32, screen_dimensions.height)),
+// };
+
+// var buffer: [13]u8 = undefined;
+// const audio_progress_label_text = try std.fmt.bufPrint(&buffer, "{d:0>2}:{d:0>2} / {d:0>2}:{d:0>2}", .{ track_duration_played.minutes, track_duration_played.seconds, track_duration_total.minutes, track_duration_total.seconds });
+// const audio_progress_label_placement = geometry.Coordinates2D(ScreenNormalizedBaseType){ .x = -0.9, .y = 0.9 };
+// const audio_progress_text_color = RGBA(f32){ .r = 0.8, .g = 0.8, .b = 0.8, .a = 1.0 };
+
+// _ = try gui.generateText(GenericVertex, face_allocator, audio_progress_label_text, audio_progress_label_placement, scale_factor, glyph_set, audio_progress_text_color, null, texture_layer_dimensions);
+
+// is_render_requested = true;
+// }
+
+fn handleAudioStopped() void {
+    log.info("Audio stopped event triggered", .{});
+    const progress_percentage: f32 = 0.0;
+    var face_writer = quad_face_writer_pool.create(audio_progress_bar_faces_quad_index, 1);
     const scale_factor = geometry.ScaleFactor2D(f32){
         .horizontal = (2.0 / @intToFloat(f32, screen_dimensions.width)),
         .vertical = (2.0 / @intToFloat(f32, screen_dimensions.height)),
     };
 
-    var buffer: [13]u8 = undefined;
-    const audio_progress_label_text = try std.fmt.bufPrint(&buffer, "{d:0>2}:{d:0>2} / {d:0>2}:{d:0>2}", .{ track_duration_played.minutes, track_duration_played.seconds, track_duration_total.minutes, track_duration_total.seconds });
-    const audio_progress_label_placement = geometry.Coordinates2D(ScreenNormalizedBaseType){ .x = -0.9, .y = 0.9 };
-    const audio_progress_text_color = RGBA(f32){ .r = 0.8, .g = 0.8, .b = 0.8, .a = 1.0 };
+    const width: f32 = 1.0;
+    const margin: f32 = (2.0 - width) / 2.0;
 
-    _ = try gui.generateText(GenericVertex, face_allocator, audio_progress_label_text, audio_progress_label_placement, scale_factor, glyph_set, audio_progress_text_color, null, texture_layer_dimensions);
+    const inner_margin_horizontal: f32 = 0.005;
+    const inner_margin_vertical: f32 = 1 * scale_factor.vertical;
 
+    const extent = geometry.Extent2D(ScreenNormalizedBaseType){
+        .x = -1.0 + margin + inner_margin_horizontal,
+        .y = 0.8 - inner_margin_vertical,
+        .width = (width - (inner_margin_horizontal * 2.0)),
+        .height = 6 * scale_factor.vertical,
+    };
+
+    const color = RGBA(f32).fromInt(u8, 150, 50, 80, 255);
+    _ = generateAudioProgressBar(&face_writer, progress_percentage, color, extent) catch |err| {
+        log.warn("Failed to draw audio progress bar : {s}", .{err});
+        return;
+    };
+
+    vertex_buffer_count -= (5 * 2);
+    is_render_requested = true;
+}
+
+fn handleAudioStarted() void {
+    const max_title_length: u32 = 16;
+    const max_artist_length: u32 = 16;
+    const charactor_count: u32 = 10;
+    const maximum_quad_count = charactor_count + max_artist_length + max_title_length;
+
+    var face_writer = quad_face_writer_pool.create(vertex_buffer_count, maximum_quad_count);
+    const scale_factor = geometry.ScaleFactor2D(f32){
+        .horizontal = (2.0 / @intToFloat(f32, screen_dimensions.width)),
+        .vertical = (2.0 / @intToFloat(f32, screen_dimensions.height)),
+    };
+
+    generateDurationLabels(&face_writer, scale_factor) catch |err| {
+        log.warn("Failed to draw audio duration label : {s}", .{err});
+        return;
+    };
+
+    log.info("Rendering track details", .{});
+    renderCurrentTrackDetails(&face_writer, scale_factor) catch |err| {
+        log.warn("Failed to render current track details : {s}", .{err});
+        return;
+    };
+
+    vertex_buffer_count += face_writer.used;
     is_render_requested = true;
 }
 
@@ -3099,56 +3067,11 @@ fn appLoop(allocator: Allocator, app: *GraphicsContext) !void {
             screen_dimensions.height = screen.height;
         }
 
-        if (audio.events_buffer.count > 0) {
-            const scale_factor = geometry.ScaleFactor2D(f32){
-                .horizontal = (2.0 / @intToFloat(f32, screen_dimensions.width)),
-                .vertical = (2.0 / @intToFloat(f32, screen_dimensions.height)),
-            };
-
-            const vertices = @ptrCast([*]GenericVertex, @alignCast(16, &mapped_device_memory[vertices_range_index_begin]));
-            for (audio.events_buffer.items[0..audio.events_buffer.count]) |event| {
+        if (!audio.output_event_buffer.empty()) {
+            for (audio.output_event_buffer.collect()) |event| {
                 switch (event) {
-                    .stopped => {
-                        log.info("Audio stopped event triggered", .{});
-
-                        const progress_percentage: f32 = 0.0;
-
-                        const memory_start = @ptrCast([*]u8, @intToPtr([*]u8, @ptrToInt(&vertices[audio_progress_bar_faces_quad_index * 4])));
-                        var fixed_buffer_allocator = FixedBufferAllocator.init(memory_start, vertices_range_size);
-                        var face_allocator = fixed_buffer_allocator.allocator();
-
-                        const width: f32 = 1.0;
-                        const margin: f32 = (2.0 - width) / 2.0;
-
-                        const inner_margin_horizontal: f32 = 0.005;
-                        const inner_margin_vertical: f32 = 1 * scale_factor.vertical;
-
-                        const extent = geometry.Extent2D(ScreenNormalizedBaseType){
-                            .x = -1.0 + margin + inner_margin_horizontal,
-                            .y = 0.8 - inner_margin_vertical,
-                            .width = (width - (inner_margin_horizontal * 2.0)),
-                            .height = 6 * scale_factor.vertical,
-                        };
-
-                        const color = RGBA(f32).fromInt(u8, 150, 50, 80, 255);
-                        _ = try generateAudioProgressBar(face_allocator, progress_percentage, color, extent);
-
-                        vertex_buffer_count -= 5 * 2;
-
-                        is_render_requested = true;
-                    },
-                    .started => {
-                        const memory_start = @ptrCast([*]u8, @intToPtr([*]u8, @ptrToInt(&vertices[vertex_buffer_count * 4])));
-                        var fixed_buffer_allocator = FixedBufferAllocator.init(memory_start, vertices_range_size);
-                        var face_allocator = fixed_buffer_allocator.allocator();
-
-                        try generateDurationLabels(face_allocator, scale_factor);
-
-                        const terminal_face = try face_allocator.create(GenericVertex);
-                        vertex_buffer_count = @intCast(u32, (@ptrToInt(terminal_face) - @ptrToInt(&vertices[0])) / @sizeOf(QuadFace(GenericVertex)));
-
-                        is_render_requested = true;
-                    },
+                    .stopped => handleAudioStopped(),
+                    .started => handleAudioStarted(),
                     .duration_calculated => {
                         // log.info("Track duration seconds: {d}", .{audio.mp3.track_length});
                     },
@@ -3157,7 +3080,6 @@ fn appLoop(allocator: Allocator, app: *GraphicsContext) !void {
                     },
                 }
             }
-            audio.events_buffer.clear();
         }
 
         if (framebuffer_resized) {
@@ -3208,8 +3130,6 @@ fn appLoop(allocator: Allocator, app: *GraphicsContext) !void {
             const track_length_seconds: u32 = audio.output.trackLengthSeconds() catch 0;
             const track_played_seconds: u32 = audio.output.secondsPlayed() catch 0;
 
-            const vertices = @ptrCast([*]GenericVertex, @alignCast(16, &mapped_device_memory[vertices_range_index_begin]));
-
             // {
             // const vertices_begin_index: usize = audio_progress_label_faces_quad_index * 4;
             // try updateAudioDurationLabel(track_played_seconds, track_length_seconds, vertices[vertices_begin_index .. vertices_begin_index + (11 * 4)]);
@@ -3228,11 +3148,6 @@ fn appLoop(allocator: Allocator, app: *GraphicsContext) !void {
 
                 const progress_percentage: f32 = @intToFloat(f32, track_played_seconds) / @intToFloat(f32, track_length_seconds);
                 if (progress_percentage > 0.0 and progress_percentage <= 1.0) {
-                    const vertices_begin_index: usize = audio_progress_bar_faces_quad_index * 4;
-
-                    var fixed_buffer_allocator = FixedBufferAllocator.init(@ptrCast([*]u8, &vertices[vertices_begin_index]), vertices_range_size);
-                    var face_allocator = fixed_buffer_allocator.allocator();
-
                     const width: f32 = 1.0;
                     const margin: f32 = (2.0 - width) / 2.0;
 
@@ -3247,13 +3162,14 @@ fn appLoop(allocator: Allocator, app: *GraphicsContext) !void {
                     };
 
                     const color = RGBA(f32).fromInt(u8, 150, 50, 80, 255);
-                    _ = try generateAudioProgressBar(face_allocator, progress_percentage, color, extent);
+                    var face_writer = quad_face_writer_pool.create(audio_progress_bar_faces_quad_index, 1);
+
+                    _ = try generateAudioProgressBar(&face_writer, progress_percentage, color, extent);
                 }
 
                 {
-                    var fixed_buffer_allocator = FixedBufferAllocator.init(@ptrCast([*]u8, &vertices[audio_progress_label_faces_quad_index * 4]), vertices_range_size);
-                    var face_allocator = fixed_buffer_allocator.allocator();
-                    try generateDurationLabels(face_allocator, scale_factor);
+                    var face_writer = quad_face_writer_pool.create(audio_progress_label_faces_quad_index, 10);
+                    try generateDurationLabels(&face_writer, scale_factor);
                 }
                 is_render_requested = true;
             }

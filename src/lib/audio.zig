@@ -61,6 +61,7 @@ pub const InputEvent = enum(u8) {
 };
 
 pub var input_event_buffer: FixedAtomicEventQueue(InputEvent, 10) = .{};
+pub var output_event_buffer: FixedAtomicEventQueue(AudioEvent, 10) = .{};
 
 pub var events_buffer: FixedBuffer(AudioEvent, 10) = .{};
 pub var current_track: TrackMetadata = undefined;
@@ -136,7 +137,7 @@ pub const mp3 = struct {
 
         var sample_index: u32 = 0;
         while (sample_index < samples_count) : (sample_index += 1) {
-            for (input_event_buffer.collect_events()) |event| {
+            for (input_event_buffer.collect()) |event| {
                 switch (event) {
                     .stop_requested => {},
                     .pause_requested => {},
@@ -212,10 +213,15 @@ pub const mp3 = struct {
         assert(get_track_length_end_ts >= get_track_length_start_ts);
         log.info("Track length decoded in {d} ms", .{get_track_length_end_ts - get_track_length_start_ts});
 
-        _ = events_buffer.append(.duration_calculated);
+        output_event_buffer.add(.duration_calculated) catch |err| {
+            log.err("Failed to add output event: {s}", .{err});
+        };
 
         output.playback_state = .playing;
-        _ = events_buffer.append(.started);
+
+        output_event_buffer.add(.started) catch |err| {
+            log.err("Failed to add output event: {s}", .{err});
+        };
 
         mad.mad_decoder_init(&decoder, @ptrCast(*anyopaque, input_buffer), inputCallback, null, null, outputCallback, errorCallback, null);
         _ = mad.mad_decoder_run(&decoder, mad.MAD_DECODER_MODE_SYNC);

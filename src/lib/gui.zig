@@ -27,6 +27,67 @@ const event_system = @import("event_system");
 
 var next_widget_id: u32 = 0;
 
+/// Used to allocate QuadFaceWriters that share backing memory
+pub fn QuadFaceWriterPool(comptime VertexType: type) type {
+    return struct {
+        const Self = @This();
+
+        memory_ptr: [*]QuadFace(VertexType),
+        memory_quad_range: u32,
+
+        pub fn initialize(start: [*]align(@alignOf(VertexType)) u8, memory_quad_range: u32) Self {
+            return .{
+                .memory_ptr = @ptrCast([*]QuadFace(VertexType), start),
+                .memory_quad_range = memory_quad_range,
+            };
+        }
+
+        pub fn create(self: *Self, quad_index: u32, quad_size: u32) QuadFaceWriter(VertexType) {
+            assert((quad_index + quad_size) <= self.memory_quad_range);
+            return QuadFaceWriter(VertexType).initialize(@ptrCast([*]QuadFace(VertexType), &self.memory_ptr[quad_index]), quad_size);
+        }
+    };
+}
+
+pub fn QuadFaceWriter(comptime VertexType: type) type {
+    return struct {
+        const Self = @This();
+
+        memory_ptr: [*]QuadFace(VertexType),
+        capacity: u32,
+        used: u32 = 0,
+
+        pub fn initialize(start: [*]QuadFace(VertexType), quad_size: u32) Self {
+            return .{
+                .memory_ptr = start,
+                .capacity = quad_size,
+                .used = 0,
+            };
+        }
+
+        pub fn remaining(self: *Self) u16 {
+            assert(self.capacity >= self.used);
+            return @intCast(u16, self.capacity - self.used);
+        }
+
+        pub fn reset(self: *Self) void {
+            self.used = 0;
+        }
+
+        pub fn create(self: *Self) !*QuadFace(VertexType) {
+            if (self.used == self.capacity) return error.OutOfMemory;
+            defer self.used += 1;
+            return &self.memory_ptr[self.used];
+        }
+
+        pub fn allocate(self: *Self, amount: u32) ![]QuadFace(VertexType) {
+            if ((self.used + amount) > self.capacity) return error.OutOfMemory;
+            defer self.used += amount;
+            return self.memory_ptr[self.used .. self.used + amount];
+        }
+    };
+}
+
 pub fn Widget(comptime VertexType: type) type {
     return struct {
         faces: []QuadFace(VertexType),
@@ -41,20 +102,15 @@ fn nextWidgetId() u32 {
     return next_widget_id;
 }
 
-pub const Context = struct {
-    allocator: Allocator,
-    vertices_count: u32,
-};
-
 pub const Alignment = enum { left, right, center };
 
 pub const grid = struct {
     pub fn generate(
         comptime VertexType: type,
-        allocator: Allocator,
+        face_writer: *QuadFaceWriter(VertexType),
         extent: geometry.Extent2D(ScreenNormalizedBaseType),
         color: RGBA(f32),
-        layout: geometry.Dimensions2D(ScreenNormalizedBaseType),
+        layout: geometry.Dimensions2D(u32),
         line_width: f32,
     ) ![]QuadFace(VertexType) {
         const x_increment_scaled: f32 = extent.width / @intToFloat(f32, layout.width);
@@ -63,7 +119,7 @@ pub const grid = struct {
         assert(layout.height > 0);
         assert(layout.width > 0);
 
-        var faces = try allocator.alloc(QuadFace(VertexType), layout.height + layout.width - 2);
+        var faces = try face_writer.allocate(layout.height + layout.width - 2);
 
         var y: u32 = 0;
         while (y < (layout.height - 1)) : (y += 1) {
@@ -100,7 +156,7 @@ pub const button = struct {
     // TODO: Don't hardcode non-center alignment, maybe split function
     pub fn generate(
         comptime VertexType: type,
-        allocator: Allocator,
+        face_writer: *QuadFaceWriter(VertexType),
         glyph_set: text.GlyphSet,
         label: []const u8,
         extent: geometry.Extent2D(ScreenNormalizedBaseType),
@@ -114,7 +170,7 @@ pub const button = struct {
         // TODO: Implement right align
         assert(text_alignment != .right);
 
-        var background_face: *QuadFace(VertexType) = try allocator.create(QuadFace(VertexType));
+        var background_face: *QuadFace(VertexType) = try face_writer.create();
 
         // Background has to be generated first so that it doesn't cover the label text
         background_face.* = graphics.generateQuadColored(VertexType, extent, color);
@@ -139,7 +195,7 @@ pub const button = struct {
             .y = extent.y - vertical_margin,
         };
 
-        const label_faces = try generateText(VertexType, allocator, label, label_origin, scale_factor, glyph_set, label_color, null, texture_dimensions);
+        const label_faces = try generateText(VertexType, face_writer, label, label_origin, scale_factor, glyph_set, label_color, null, texture_dimensions);
 
         // Memory for background_face and label_face should be contigious
         assert(@ptrToInt(background_face) == @ptrToInt(label_faces.ptr) - @sizeOf(QuadFace(VertexType)));
@@ -160,12 +216,12 @@ pub const button = struct {
 pub const image = struct {
     pub fn generate(
         comptime VertexType: type,
-        allocator: Allocator,
+        face_writer: *QuadFaceWriter(VertexType),
         image_id: f32,
         extent: geometry.Extent2D(ScreenNormalizedBaseType),
     ) ![]QuadFace(VertexType) {
         assert(image_id == 1 or image_id == 2);
-        var image_faces = try allocator.alloc(QuadFace(VertexType), 1);
+        var image_faces = try face_writer.allocate(1);
 
         image_faces[0][0] =
             .{
@@ -284,7 +340,7 @@ pub fn calculateRenderedTextDimensions(
 // TODO: Audit
 pub fn generateText(
     comptime VertexType: type,
-    face_allocator: Allocator,
+    face_writer: *QuadFaceWriter(VertexType),
     text_buffer: []const u8,
     origin: geometry.Coordinates2D(ScreenNormalizedBaseType),
     scale_factor: ScaleFactor2D(f32),
@@ -303,7 +359,8 @@ pub fn generateText(
         break :blk i;
     };
 
-    var vertices = try face_allocator.alloc(QuadFace(VertexType), glyph_length);
+    var vertices = try face_writer.allocate(glyph_length);
+
     var cursor = geometry.Coordinates2D(u16){ .x = 0, .y = 0 };
     var skipped_count: u32 = 0;
     const line_height: f32 = if (line_height_opt != null) line_height_opt.? else 0;
@@ -378,7 +435,17 @@ pub fn generateText(
     return vertices;
 }
 
-pub fn generateLineMargin(comptime VertexType: type, allocator: Allocator, glyph_set: text.GlyphSet, coordinates: geometry.Coordinates2D(ScreenNormalizedBaseType), scale_factor: ScaleFactor2D(f32), line_start: u16, line_count: u16, line_height: f32, texture_dimensions: geometry.Dimensions2D(TextureNormalizedBaseType)) ![]QuadFace(VertexType) {
+pub fn generateLineMargin(
+    comptime VertexType: type,
+    face_writer: *QuadFaceWriter(VertexType),
+    glyph_set: text.GlyphSet,
+    coordinates: geometry.Coordinates2D(ScreenNormalizedBaseType),
+    scale_factor: ScaleFactor2D(f32),
+    line_start: u16,
+    line_count: u16,
+    line_height: f32,
+    texture_dimensions: geometry.Dimensions2D(TextureNormalizedBaseType),
+) ![]QuadFace(VertexType) {
 
     // Loop through lines to calculate how many vertices will be required
     const quads_required_count = blk: {
@@ -393,7 +460,7 @@ pub fn generateLineMargin(comptime VertexType: type, allocator: Allocator, glyph
     assert(line_count > 0);
     const chars_wide_count: u32 = util.digitCount(line_start + line_count);
 
-    var vertex_faces = try allocator.alloc(QuadFace(VertexType), quads_required_count);
+    var vertex_faces = try face_writer.allocate(quads_required_count);
 
     var i: u32 = 1;
     var faces_written_count: u32 = 0;
