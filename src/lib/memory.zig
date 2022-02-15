@@ -8,8 +8,12 @@ pub fn FixedBuffer(comptime BaseType: type, comptime capacity: u32) type {
 
         const Self = @This();
 
-        pub fn append(self: *Self, item: BaseType) callconv(.Inline) u32  {
-            assert(self.count < capacity);
+        pub inline fn append(self: *Self, item: BaseType) u32 {
+            if (self.count >= capacity) {
+                std.log.err("Overflow of {s} with capacity: {d}", .{ BaseType, self.count });
+                assert(self.count < capacity);
+            }
+
             self.items[self.count] = item;
             self.count += 1;
             return self.count - 1;

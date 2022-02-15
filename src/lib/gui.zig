@@ -42,9 +42,9 @@ pub fn QuadFaceWriterPool(comptime VertexType: type) type {
             };
         }
 
-        pub fn create(self: *Self, quad_index: u32, quad_size: u32) QuadFaceWriter(VertexType) {
+        pub fn create(self: *Self, quad_index: u16, quad_size: u16) QuadFaceWriter(VertexType) {
             assert((quad_index + quad_size) <= self.memory_quad_range);
-            return QuadFaceWriter(VertexType).initialize(@ptrCast([*]QuadFace(VertexType), &self.memory_ptr[quad_index]), quad_size);
+            return QuadFaceWriter(VertexType).initialize(self.memory_ptr, quad_index, quad_size);
         }
     };
 }
@@ -54,15 +54,24 @@ pub fn QuadFaceWriter(comptime VertexType: type) type {
         const Self = @This();
 
         memory_ptr: [*]QuadFace(VertexType),
-        capacity: u32,
-        used: u32 = 0,
 
-        pub fn initialize(start: [*]QuadFace(VertexType), quad_size: u32) Self {
+        quad_index: u16,
+        pool_index: u16,
+        capacity: u16,
+        used: u16 = 0,
+
+        pub fn initialize(base: [*]QuadFace(VertexType), quad_index: u16, quad_size: u16) Self {
             return .{
-                .memory_ptr = start,
+                .memory_ptr = @ptrCast([*]QuadFace(VertexType), &base[quad_index]),
+                .pool_index = 0,
+                .quad_index = quad_index,
                 .capacity = quad_size,
                 .used = 0,
             };
+        }
+
+        pub fn indexFromBase(self: Self) u32 {
+            return self.quad_index + self.used;
         }
 
         pub fn remaining(self: *Self) u16 {
@@ -80,7 +89,7 @@ pub fn QuadFaceWriter(comptime VertexType: type) type {
             return &self.memory_ptr[self.used];
         }
 
-        pub fn allocate(self: *Self, amount: u32) ![]QuadFace(VertexType) {
+        pub fn allocate(self: *Self, amount: u16) ![]QuadFace(VertexType) {
             if ((self.used + amount) > self.capacity) return error.OutOfMemory;
             defer self.used += amount;
             return self.memory_ptr[self.used .. self.used + amount];
@@ -317,7 +326,7 @@ pub fn calculateRenderedTextDimensions(
                         break :blk x;
                     }
                 }
-                log.err("Charactor not in set '{c}' '{s}'", .{ char, text_buffer });
+                log.err("Charactor not in set '{c}':{d} '{s}'", .{ char, char, text_buffer });
                 continue;
                 // return error.CharacterNotInSet;
             };
@@ -349,8 +358,8 @@ pub fn generateText(
     line_height_opt: ?f32,
     texture_dimensions: geometry.Dimensions2D(TexturePixelBaseType),
 ) ![]QuadFace(VertexType) {
-    const glyph_length: u32 = blk: {
-        var i: u32 = 0;
+    const glyph_length: u16 = blk: {
+        var i: u16 = 0;
         for (text_buffer) |c| {
             if (c != ' ' and c != '\n') {
                 i += 1;

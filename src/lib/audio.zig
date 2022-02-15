@@ -8,8 +8,6 @@ const assert = std.debug.assert;
 const log = std.log;
 const Allocator = std.mem.Allocator;
 
-const memory = @import("memory");
-const FixedBuffer = memory.FixedBuffer;
 const FixedAtomicEventQueue = @import("message_queue").FixedAtomicEventQueue;
 
 const mad = @cImport({
@@ -63,8 +61,25 @@ pub const InputEvent = enum(u8) {
 pub var input_event_buffer: FixedAtomicEventQueue(InputEvent, 10) = .{};
 pub var output_event_buffer: FixedAtomicEventQueue(AudioEvent, 10) = .{};
 
-pub var events_buffer: FixedBuffer(AudioEvent, 10) = .{};
 pub var current_track: TrackMetadata = undefined;
+
+// Hack to attempt to remove unsupported multibyte encoded charactors
+fn ensureAscii(text: *[]u8) u32 {
+    var write_index: u32 = 0;
+    var read_index: u32 = 0;
+
+    while (read_index < text.len) : (read_index += 1) {
+        const c = text.*[read_index];
+        if (!std.ascii.isPrint(c)) {
+            continue;
+        }
+
+        text.*[write_index] = text.*[read_index];
+        write_index += 1;
+    }
+
+    return write_index;
+}
 
 pub const mp3 = struct {
     fn errorCallback(data: ?*anyopaque, stream: [*c]mad.mad_stream, frame: [*c]mad.mad_frame) callconv(.C) mad.mad_flow {
@@ -85,12 +100,17 @@ pub const mp3 = struct {
 
             result.artist_length = @intCast(u32, artist_content.*.size);
             std.mem.copy(u8, result.artist[0..], artist_content.*.data[0..result.artist_length]);
+            var artist_value = result.artist[0..result.artist_length];
+            result.artist_length = ensureAscii(&artist_value);
 
             const title_frame = id3v2.tag_get_title(tag);
             const title_content = id3v2.parse_text_frame_content(title_frame);
 
             result.title_length = @intCast(u32, title_content.*.size);
             std.mem.copy(u8, result.title[0..], title_content.*.data[0..result.title_length]);
+
+            var title_value = result.title[0..result.title_length];
+            result.title_length = ensureAscii(&title_value);
         } else {
             std.mem.copy(u8, result.artist[0..], "Unknown");
             result.artist_length = 7;
@@ -255,7 +275,10 @@ pub const mp3 = struct {
         const channel_count: u32 = blk: {
             switch (header[0].mode) {
                 mad.MAD_MODE_SINGLE_CHANNEL => break :blk 1,
-                mad.MAD_MODE_DUAL_CHANNEL, mad.MAD_MODE_STEREO => break :blk 2,
+                mad.MAD_MODE_DUAL_CHANNEL,
+                mad.MAD_MODE_STEREO,
+                mad.MAD_MODE_JOINT_STEREO,
+                => break :blk 2,
                 else => {
                     log.warn("Unsupported MAD MODE index {d}, defaulting to 2 channels", .{header[0].mode});
                     break :blk 2;
@@ -551,7 +574,7 @@ pub const output = struct {
                 return error.InitializeAoFailed;
             }
 
-            _ = events_buffer.append(.initialized);
+            try output_event_buffer.add(.initialized);
         }
     }
 
@@ -582,7 +605,7 @@ pub const output = struct {
                 return error.InitializeAoFailed;
             }
 
-            _ = events_buffer.append(.initialized);
+            try output_event_buffer.add(.initialized);
         }
 
         const track_length_seconds = lengthOfAudio(audio_buffer.len, 16, 2, 44100);
@@ -591,7 +614,7 @@ pub const output = struct {
         const segment_size: u32 = 2 * 2 * 44100;
 
         playback_state = .playing;
-        _ = events_buffer.append(.started);
+        try output_event_buffer.add(.started);
 
         while (audio_index < audio_buffer.len and playback_state != .stopped) {
 
@@ -620,21 +643,21 @@ pub const output = struct {
         device = null;
 
         playback_state = .stopped;
-        _ = events_buffer.append(.stopped);
+        try output_event_buffer.add(.stopped);
         log.info("Audio finished..", .{});
     }
 
     pub fn stop() void {
         if (playback_state != .stopped) {
             playback_state = .stopped;
-            _ = events_buffer.append(.stopped);
+            output_event_buffer.add(.stopped) catch unreachable;
         }
     }
 
     pub fn pause() void {
         if (playback_state != .paused) {
             playback_state = .paused;
-            _ = events_buffer.append(.paused);
+            _ = output_event_buffer.add(.paused) catch unreachable;
         }
     }
 
@@ -645,7 +668,7 @@ pub const output = struct {
 
         if (playback_state != .playing) {
             playback_state = .playing;
-            _ = events_buffer.append(.started);
+            try output_event_buffer.add(.started);
         }
     }
 

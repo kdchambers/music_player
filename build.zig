@@ -40,6 +40,12 @@ pub fn build(b: *Builder) void {
         .path = .{ .path = lib_src_path ++ "memory.zig" },
     };
 
+    const library_navigator_pkg = std.build.Pkg{
+        .name = "LibraryNavigator",
+        .path = .{ .path = app_src_path ++ "LibraryNavigator.zig" },
+        .dependencies = &[_]Pkg{memory_pkg},
+    };
+
     const audio_pkg = std.build.Pkg{
         .name = "audio",
         .path = .{
@@ -121,6 +127,20 @@ pub fn build(b: *Builder) void {
         },
     };
 
+    const action_pkg = std.build.Pkg{
+        .name = "action",
+        .path = .{ .path = app_src_path ++ "action.zig" },
+        .dependencies = &[_]Pkg{ graphics_pkg, gui_pkg, memory_pkg },
+    };
+
+    const ui_pkg = std.build.Pkg{
+        .name = "ui",
+        .path = .{
+            .path = app_src_path ++ "ui.zig",
+        },
+        .dependencies = &[_]Pkg{ geometry_pkg, graphics_pkg, gui_pkg, constants_pkg, text_pkg, action_pkg, event_system_pkg },
+    };
+
     const glfw_pkg = std.build.Pkg{
         .name = "glfw",
         .path = .{
@@ -172,6 +192,9 @@ pub fn build(b: *Builder) void {
     exe.addPackage(geometry_pkg);
     exe.addPackage(gui_pkg);
     exe.addPackage(event_system_pkg);
+    exe.addPackage(ui_pkg);
+    exe.addPackage(action_pkg);
+    exe.addPackage(library_navigator_pkg);
 
     // exe.addLibPath("/usr/local/lib");
     exe.linkSystemLibrary("ao");

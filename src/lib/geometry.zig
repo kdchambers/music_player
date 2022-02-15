@@ -3,6 +3,8 @@
 // This program is free software: you can redistribute it and/or modify it under the terms
 // of the GNU General Public License as published by the Free Software Foundation, version 3.
 
+const std = @import("std");
+
 // TODO: Revisit this concept
 const CoordinateSystem = enum(u4) {
     percentage,
@@ -80,6 +82,14 @@ pub fn Shift2D(comptime BaseType: type) type {
     };
 }
 
+pub const percentage = percentageToNativeDeviceCoordinates;
+pub const pixel = pixelToNativeDeviceCoordinateRight;
+
+pub fn percentageToNativeDeviceCoordinates(ndc_right: f32) f32 {
+    std.debug.assert(ndc_right >= -1.0 and ndc_right <= 1.0);
+    return ndc_right / 2.0;
+}
+
 /// Converts a Coordinates2D structure using absolute pixel values to one
 /// that uses Native Device Coordinates, normalized between -1.0 and 1.0
 /// The scale factor can be calculated using the absolute screen dimensions as follows:
@@ -98,6 +108,6 @@ fn coordinates2DPixelToNativeDeviceCoordinateRight(
 /// normalized between -1.0 and 1.0
 /// The scale factor can be calculated using the absolute screen dimensions as follows:
 /// scale_factor = ScaleFactor2D{ .horizontal = 2.0 / screen_dimensions.width, .veritical = 2.0 / screen_dimensions.height};
-pub fn pixelToNativeDeviceCoordinateRight(pixel: u32, scale_factor: f32) f32 {
-    return @intToFloat(f32, pixel) * scale_factor;
+pub fn pixelToNativeDeviceCoordinateRight(pixel_value: u32, scale_factor: f32) f32 {
+    return @intToFloat(f32, pixel_value) * scale_factor;
 }

@@ -37,8 +37,10 @@ const audio = @import("audio");
 const user_config = @import("user_config");
 const QuadFaceWriter = gui.QuadFaceWriter;
 const QuadFaceWriterPool = gui.QuadFaceWriterPool;
-
+const action = @import("action");
+const ui = @import("ui");
 const theme = @import("Theme.zig").default;
+const LibraryNavigator = @import("LibraryNavigator.zig");
 
 var is_render_requested: bool = true;
 var quad_face_writer_pool: QuadFaceWriterPool(GenericVertex) = undefined;
@@ -629,7 +631,7 @@ var screen_dimensions = geometry.Dimensions2D(ScreenPixelBaseType){
 var current_frame: u32 = 0;
 var framebuffer_resized: bool = true;
 
-var text_buffer_dirty: bool = true;
+var is_draw_required: bool = true;
 
 var mapped_device_memory: [*]u8 = undefined;
 
@@ -672,102 +674,26 @@ const help_message =
     \\
 ;
 
-var music_dir: std.fs.Dir = undefined;
-
-const MediaItemKind = enum {
-    mp3,
-    flac,
-    directory,
-    unknown,
-};
-
-fn StringBuffer(comptime size: u32) type {
-    return struct {
-        const This = @This();
-
-        fn toSlice(self: *This) []u8 {
-            return self.bytes[0..self.count];
-        }
-
-        fn fromSlice(self: *This, slice: []const u8) !void {
-            if (slice.len > (size - 1)) {
-                return error.InsuffienceSpace;
-            }
-
-            std.mem.copy(u8, self.bytes[0..], slice[0..]);
-            self.bytes[slice.len] = 0; // Null terminate
-
-            self.count = @intCast(u32, slice.len);
-        }
-
-        count: u32,
-        bytes: [size]u8,
-    };
-}
-
-const MediaItem = struct {
-    kind: MediaItemKind,
-    name: StringBuffer(60),
-};
+// NOTE: For development
+// const library_root_path = "../../../../mnt/data/media/music";
 
 // TODO: You can define this with a env variable
-// const library_root_path = "/mnt/data/media/music";
 const library_root_path = "assets/example_library";
-var loaded_media_items: FixedBuffer(MediaItem, 32) = .{ .count = 0 };
-var current_directory: std.fs.Dir = undefined;
+var library_navigator: LibraryNavigator = undefined;
 
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
+
+    const library_root_directory = try std.fs.cwd().openDir(library_root_path, .{ .iterate = true });
+    library_navigator = LibraryNavigator.create(library_root_directory);
+    try library_navigator.load(20, 0);
 
     var allocator = gpa.allocator();
 
     //
     // Load all media items in the library root directory
     //
-
-    {
-        current_directory = try std.fs.cwd().openDir(library_root_path, .{ .iterate = true });
-
-        const max_media_items: u32 = 10;
-
-        var iterator = current_directory.iterate();
-        var entry = try iterator.next();
-
-        var i: u32 = 0;
-        while (entry != null and loaded_media_items.count < max_media_items) {
-            if (i == max_media_items) break;
-
-            i += 1;
-
-            const item_name = entry.?.name;
-
-            var media_item: MediaItem = undefined;
-            media_item.kind = blk: {
-                if (item_name.len > 4) {
-                    var extension_label: []u8 = try allocator.dupe(u8, item_name[item_name.len - 4 ..]);
-                    defer allocator.free(extension_label);
-                    toUpper(&extension_label);
-
-                    if (std.mem.eql(u8, extension_label, "FLAC")) {
-                        break :blk .flac;
-                    } else if (std.mem.eql(u8, extension_label, ".MP3")) {
-                        break :blk .mp3;
-                    } else {
-                        break :blk .directory;
-                    }
-                } else {
-                    break :blk .directory;
-                }
-            };
-
-            try media_item.name.fromSlice(item_name);
-            _ = loaded_media_items.append(media_item);
-
-            log.info("Media item: '{s}' {s}", .{ media_item.name.toSlice(), media_item.kind });
-            entry = try iterator.next();
-        }
-    }
 
     var graphics_context: GraphicsContext = undefined;
 
@@ -1147,12 +1073,6 @@ fn recreateSwapchain(allocator: Allocator, app: *GraphicsContext) !void {
         image_view.* = try app.device_dispatch.createImageView(app.logical_device, &image_view_create_info, null);
     }
 
-    // app.render_pass = try createRenderPass(app.*);
-    // app.descriptor_set_layouts = try createDescriptorSetLayouts(allocator, app.*);
-    // app.pipeline_layout = try createPipelineLayout(app.*, app.descriptor_set_layouts);
-    // app.descriptor_pool = try createDescriptorPool(app.*);
-    // app.descriptor_sets = try createDescriptorSets(allocator, app.*);
-
     app.device_dispatch.destroyPipeline(app.logical_device, app.graphics_pipeline, null);
     app.graphics_pipeline = try createGraphicsPipeline(app.*, app.pipeline_layout, app.render_pass);
 
@@ -1167,8 +1087,6 @@ fn recreateSwapchain(allocator: Allocator, app: *GraphicsContext) !void {
     try recordRenderPass(app.*, vertex_buffer_count * 6);
 
     log.info("Swapchain recreated", .{});
-
-    //
 }
 
 fn allocateCommandBuffers(allocator: Allocator, app: GraphicsContext, count: u32) ![]vk.CommandBuffer {
@@ -1712,31 +1630,6 @@ fn setupApplication(allocator: Allocator, app: *GraphicsContext) !void {
         app.command_pool = try app.device_dispatch.createCommandPool(app.logical_device, &command_pool_create_info, null);
     }
 
-    // if (vk.vkCreateCommandPool(app.logical_device, &command_pool_create_info, null, &app.command_pool) != .success) {
-    // return error.CreateCommandPoolFailed;
-    // }
-
-    // {
-    // const command_buffer_allocate_info = vk.CommandBufferAllocateInfo{
-    // .s_type = vk.StructureType.command_buffer_allocate_info,
-    // .command_pool = app.command_pool,
-    // .level = .primary,
-    // .command_buffer_count = @intCast(u32, app.swapchain_images.len),
-    // .p_next = null,
-    // };
-
-    // app.command_buffers = try allocator.alloc(vk.CommandBuffer, app.swapchain_images.len);
-    // try app.device_dispatch.allocateCommandBuffers(app.logical_device, &command_buffer_allocate_info, app.command_buffers.ptr);
-    // }
-
-    // app.command_buffers = try zvk.allocateCommandBuffers(allocator, app.logical_device, vk.CommandBufferAllocateInfo{
-    // .s_type = vk.StructureType.COMMAND_BUFFER_ALLOCATE_INFO,
-    // .commandPool = app.command_pool,
-    // .level = .PRIMARY,
-    // .commandBufferCount = @intCast(u32, app.swapchain_images.len),
-    // .p_next = null,
-    // });
-
     app.images_available = try allocator.alloc(vk.Semaphore, max_frames_in_flight);
     app.renders_finished = try allocator.alloc(vk.Semaphore, max_frames_in_flight);
     app.inflight_fences = try allocator.alloc(vk.Fence, max_frames_in_flight);
@@ -1761,19 +1654,13 @@ fn setupApplication(allocator: Allocator, app: *GraphicsContext) !void {
         i += 1;
     }
 
-    log.info("Setting up pipeline", .{});
-
     app.vertex_shader_module = try createVertexShaderModule(app.*);
     app.fragment_shader_module = try createFragmentShaderModule(app.*);
 
-    log.info(" Creating command buffers", .{});
     assert(app.swapchain_images.len > 0);
     app.command_buffers = try allocateCommandBuffers(allocator, app.*, @intCast(u32, app.swapchain_images.len));
 
-    log.info(" Creating render pass", .{});
     app.render_pass = try createRenderPass(app.*);
-
-    log.info(" Creating descriptor set layouts", .{});
 
     app.descriptor_set_layouts = try createDescriptorSetLayouts(allocator, app.*);
     app.pipeline_layout = try createPipelineLayout(app.*, app.descriptor_set_layouts);
@@ -1781,8 +1668,6 @@ fn setupApplication(allocator: Allocator, app: *GraphicsContext) !void {
     app.descriptor_sets = try createDescriptorSets(allocator, app.*, app.descriptor_set_layouts);
     app.graphics_pipeline = try createGraphicsPipeline(app.*, app.pipeline_layout, app.render_pass);
     app.framebuffers = try createFramebuffers(allocator, app.*);
-
-    log.info("Application initialized", .{});
 }
 
 fn swapTexture(app: *GraphicsContext) !void {
@@ -1940,10 +1825,6 @@ fn swapTexture(app: *GraphicsContext) !void {
     }
 }
 
-// fn glfwTextCallback(window: *vk.GLFWwindow, codepoint: u32) callconv(.C) void {}
-
-var color_list: FixedBuffer(RGBA(f32), 30) = undefined;
-
 fn customActions(action_id: u16) void {
     if (action_id == 1) {
         // update_image = true;
@@ -1960,22 +1841,22 @@ fn toUpper(string: *[]u8) void {
     }
 }
 
-fn handleAudioPlay(allocator: Allocator, action_payload: ActionPayloadAudioPlay) !void {
+fn handleAudioPlay(allocator: Allocator, action_payload: action.PayloadAudioPlay) !void {
 
     // TODO: If track is already set, update
     const audio_track_name = audio_files.items[action_payload.id];
 
     // TODO: Don't hardcode, or put in a definition
     var current_path_buffer: [128]u8 = undefined;
-    const current_path = try current_directory.realpath(".", current_path_buffer[0..]);
+    const current_path = try library_navigator.current_directory.realpath(".", current_path_buffer[0..]);
 
     const paths: [2][]const u8 = .{ current_path, audio_track_name };
     const full_path = std.fs.path.joinZ(allocator, paths[0..]) catch null;
     defer allocator.free(full_path.?);
 
-    const kind = loaded_media_items.items[action_payload.id].kind;
+    const kind = library_navigator.loaded_media_items.items[action_payload.id].fileType();
 
-    log.info("Playing track {s}", .{loaded_media_items.items[action_payload.id].name.toSlice()});
+    log.info("Playing track {s}", .{library_navigator.loaded_media_items.items[action_payload.id].root()});
     log.info("Playing path {s}", .{full_path});
 
     switch (kind) {
@@ -1999,7 +1880,7 @@ fn handleAudioPlay(allocator: Allocator, action_payload: ActionPayloadAudioPlay)
     // assert(audio.output.getState() == .playing);
 }
 
-fn handleUpdateVertices(allocator: Allocator, action_payload: *ActionPayloadVerticesUpdate) !void {
+fn handleUpdateVertices(allocator: Allocator, action_payload: *action.PayloadVerticesUpdate) !void {
     const vertices = @ptrCast([*]GenericVertex, @alignCast(16, &mapped_device_memory[vertices_range_index_begin]));
 
     // TODO: All added for consistency but some variables not used
@@ -2013,10 +1894,7 @@ fn handleUpdateVertices(allocator: Allocator, action_payload: *ActionPayloadVert
     const loaded_vertex_count = action_payload.loaded_vertex_count * 4;
     const alternate_vertex_count = action_payload.alternate_vertex_count * 4;
 
-    // const loaded_vertex_quad_count = action_payload.loaded_vertex_count;
-    // const alternate_vertex_quad_count = action_payload.alternate_vertex_count;
-
-    var alternate_base_vertex: [*]GenericVertex = &inactive_vertices_attachments.items[alternate_quad_begin];
+    var alternate_base_vertex: [*]GenericVertex = &action.inactive_vertices_attachments.items[alternate_quad_begin];
 
     const largest_range_vertex_count = if (alternate_vertex_count > loaded_vertex_count) alternate_vertex_count else loaded_vertex_count;
 
@@ -2051,10 +1929,17 @@ fn handleMouseEvents(x: f64, y: f64, is_pressed_left: bool, is_pressed_right: bo
     const half_height = @intToFloat(f32, screen_dimensions.height) / 2.0;
 
     const triggered_events_buffer_size = 10;
-    const triggered_events = event_system.eventsFromMouseUpdate(triggered_events_buffer_size, .{
-        .x = @floatCast(f32, (x - half_width) * 2.0) / @intToFloat(f32, screen_dimensions.width),
-        .y = @floatCast(f32, (y - half_height) * 2.0) / @intToFloat(f32, screen_dimensions.height),
-    }, .{ .is_left_pressed = is_pressed_left, .is_right_pressed = is_pressed_right });
+    const triggered_events = event_system.eventsFromMouseUpdate(
+        triggered_events_buffer_size,
+        .{
+            .x = @floatCast(f32, (x - half_width) * 2.0) / @intToFloat(f32, screen_dimensions.width),
+            .y = @floatCast(f32, (y - half_height) * 2.0) / @intToFloat(f32, screen_dimensions.height),
+        },
+        .{
+            .is_left_pressed = is_pressed_left,
+            .is_right_pressed = is_pressed_right,
+        },
+    );
 
     if (triggered_events.count == 0) return;
 
@@ -2066,19 +1951,20 @@ fn handleMouseEvents(x: f64, y: f64, is_pressed_left: bool, is_pressed_right: bo
     for (triggered_events.toSlice()) |event_id| {
         // TODO: Determine the action type based on offsets
 
-        var action = system_actions.items[event_id];
+        // TODO: Rename
+        var act = action.system_actions.items[event_id];
 
-        switch (action.action_type) {
+        switch (act.action_type) {
             .color_set => {
-                const index = action.payload.color_set.color_index;
-                const color = color_list.items[index];
+                const index = act.payload.color_set.color_index;
+                const color = action.color_list.items[index];
 
-                const vertices_begin = vertex_range_attachments.items[action.payload.color_set.vertex_range_begin].vertex_begin * 4;
+                const vertices_begin = action.vertex_range_attachments.items[act.payload.color_set.vertex_range_begin].vertex_begin * 4;
 
                 // NOTE: For now, assume we are only using a single face (4 vertices)
-                assert(action.payload.color_set.vertex_range_span == 1);
+                assert(act.payload.color_set.vertex_range_span == 1);
 
-                const vertices_end = vertices_begin + (vertex_range_attachments.items[action.payload.color_set.vertex_range_begin].vertex_count * 4);
+                const vertices_end = vertices_begin + (action.vertex_range_attachments.items[act.payload.color_set.vertex_range_begin].vertex_count * 4);
 
                 assert(vertices_end > vertices_begin);
 
@@ -2088,8 +1974,9 @@ fn handleMouseEvents(x: f64, y: f64, is_pressed_left: bool, is_pressed_right: bo
             },
             .audio_play => {
                 const is_media_icon_resume = (audio.output.getState() != .playing);
+                // TODO: Replace allocator
                 var allocator = std.heap.c_allocator;
-                handleAudioPlay(allocator, action.payload.audio_play) catch |err| {
+                handleAudioPlay(allocator, act.payload.audio_play) catch |err| {
                     log.err("Failed to play audio : {s}", .{err});
                 };
 
@@ -2099,7 +1986,7 @@ fn handleMouseEvents(x: f64, y: f64, is_pressed_left: bool, is_pressed_right: bo
 
                 if (is_media_icon_resume) {
                     if (update_media_icon_action_id_opt) |update_media_icon_action_id| {
-                        handleUpdateVertices(allocator, &system_actions.items[update_media_icon_action_id].payload.update_vertices) catch |err| {
+                        handleUpdateVertices(allocator, &action.system_actions.items[update_media_icon_action_id].payload.update_vertices) catch |err| {
                             log.err("Failed to update vertices for animation: {s}", .{err});
                         };
                     }
@@ -2107,11 +1994,11 @@ fn handleMouseEvents(x: f64, y: f64, is_pressed_left: bool, is_pressed_right: bo
 
                 // Set the media icon button to update when clicked
                 if (update_media_icon_action_id_opt) |update_media_icon_action_id| {
-                    system_actions.items[update_media_icon_action_id].action_type = .update_vertices;
+                    action.system_actions.items[update_media_icon_action_id].action_type = .update_vertices;
                 }
 
                 log.info("Audio play", .{});
-                system_actions.items[media_button_toggle_audio_action_id].action_type = .audio_pause;
+                action.system_actions.items[media_button_toggle_audio_action_id].action_type = .audio_pause;
             },
             .audio_pause => {
                 log.info("Audio paused", .{});
@@ -2122,7 +2009,7 @@ fn handleMouseEvents(x: f64, y: f64, is_pressed_left: bool, is_pressed_right: bo
                 assert(audio.output.getState() == .paused);
 
                 log.info("Audio paused -- ", .{});
-                system_actions.items[media_button_toggle_audio_action_id].action_type = .audio_resume;
+                action.system_actions.items[media_button_toggle_audio_action_id].action_type = .audio_resume;
             },
             .audio_resume => {
                 log.info("Audio resumed", .{});
@@ -2132,127 +2019,78 @@ fn handleMouseEvents(x: f64, y: f64, is_pressed_left: bool, is_pressed_right: bo
                     };
                     std.time.sleep(10000000);
                     assert(audio.output.getState() == .playing);
-                    system_actions.items[media_button_toggle_audio_action_id].action_type = .audio_pause;
-                    // text_buffer_dirty = true;
+                    action.system_actions.items[media_button_toggle_audio_action_id].action_type = .audio_pause;
+                    // is_draw_required = true;
                 }
             },
             .directory_select => {
                 log.info("Handling directory_select event", .{});
+                const directory_id = act.payload.directory_select.directory_id;
+                if (directory_id == std.math.maxInt(u16)) {
+                    if (!library_navigator.up()) {
+                        break;
+                    }
+                } else {
+                    library_navigator.down(directory_id);
+                }
 
-                const directory_id = action.payload.directory_select.directory_id;
-
-                const new_directory_name = if (directory_id == parent_directory_id) ".." else loaded_media_items.items[directory_id].name.toSlice();
-
-                current_directory = current_directory.openDir(new_directory_name, .{ .iterate = true }) catch |err| {
-                    log.err("Failed to change directory: {s}", .{err});
-                    break;
+                library_navigator.load(20, 0) catch |err| {
+                    std.log.err("Failed to load contents of new directory : {s}", .{err});
                 };
 
-                text_buffer_dirty = true;
-                loaded_media_items.clear();
+                if (library_navigator.containsAudio()) {
+                    track_metadatas.clear();
+                    audio_files.clear();
 
-                // TODO: Duplicated code
+                    // TODO
+                    var allocator = std.heap.c_allocator;
 
-                const max_media_items: u32 = 10;
+                    for (library_navigator.loaded_media_items.toSlice()) |media_item| {
+                        std.log.info("Media item: {s}", .{media_item.fileName()});
 
-                var iterator = current_directory.iterate();
-                var entry = iterator.next() catch |err| {
-                    log.err("Failed to iterate directory: {s}", .{err});
-                    break;
-                };
-
-                track_metadatas.clear();
-                audio_files.clear();
-
-                // TODO
-                const allocator = std.heap.c_allocator;
-
-                while (entry != null and loaded_media_items.count < max_media_items) {
-                    const item_name = entry.?.name;
-
-                    var media_item: MediaItem = undefined;
-                    media_item.kind = blk: {
-                        if (entry.?.kind == .Directory) {
-                            break :blk .directory;
-                        }
-
-                        if (item_name.len > 4) {
-                            var extension_label: []u8 = allocator.dupe(u8, item_name[item_name.len - 4 ..]) catch |err| {
-                                log.err("Failed to copy file extension: {s}", .{err});
-                                return;
-                            };
-                            defer allocator.free(extension_label);
-
-                            toUpper(&extension_label);
-
-                            if (std.mem.eql(u8, extension_label, "FLAC")) {
-                                break :blk .flac;
-                            } else if (std.mem.eql(u8, extension_label, ".MP3")) {
-                                break :blk .mp3;
-                            } else {
-                                break :blk .unknown;
-                            }
-                        } else {
-                            break :blk .unknown;
-                        }
-                    };
-
-                    if (media_item.kind != .unknown) {
-                        media_item.name.fromSlice(item_name) catch |err| {
-                            log.err("Failed load media item paths: {s}", .{err});
+                        const media_item_filename = allocator.dupeZ(u8, media_item.fileName()) catch |err| {
+                            log.err("Failed load media items: {s}", .{err});
                             return;
                         };
-                        _ = loaded_media_items.append(media_item);
 
-                        if (media_item.kind != .directory) {
-                            const new_name = allocator.dupeZ(u8, entry.?.name) catch |err| {
-                                log.err("Failed load media items: {s}", .{err});
-                                return;
-                            };
+                        var current_path_buffer: [128]u8 = undefined;
+                        const current_path = library_navigator.current_directory.realpath(".", current_path_buffer[0..]) catch |err| {
+                            log.err("Failed load media items: {s}", .{err});
+                            return;
+                        };
 
-                            var current_path_buffer: [128]u8 = undefined;
-                            const current_path = current_directory.realpath(".", current_path_buffer[0..]) catch |err| {
-                                log.err("Failed load media items: {s}", .{err});
-                                return;
-                            };
+                        const paths: [2][]const u8 = .{ current_path, media_item_filename };
+                        const full_path = std.fs.path.joinZ(allocator, paths[0..]) catch null;
+                        defer allocator.free(full_path.?);
 
-                            const paths: [2][]const u8 = .{ current_path, item_name };
-                            const full_path = std.fs.path.joinZ(allocator, paths[0..]) catch null;
-                            defer allocator.free(full_path.?);
+                        log.info("Full path: {s}", .{full_path});
 
-                            log.info("Full path: {s}", .{full_path});
-
-                            // TODO:
-                            const track_metadata = blk: {
-                                if (media_item.kind == .mp3) {
-                                    break :blk audio.mp3.extractTrackMetadata(full_path.?) catch |err| {
-                                        log.err("Failed load media item metadata: {s}", .{err});
-                                        return;
-                                    };
-                                } else if (media_item.kind == .flac) {
-                                    break :blk audio.flac.extractTrackMetadata(full_path.?) catch |err| {
-                                        log.err("Failed load media item metadata: {s}", .{err});
-                                        return;
-                                    };
-                                } else {
-                                    unreachable;
-                                }
+                        // TODO:
+                        const track_metadata = blk: {
+                            const file_type = media_item.fileType();
+                            if (file_type == .mp3) {
+                                break :blk audio.mp3.extractTrackMetadata(full_path.?) catch |err| {
+                                    log.err("Failed load media item metadata: {s}", .{err});
+                                    return;
+                                };
+                            } else if (file_type == .flac) {
+                                break :blk audio.flac.extractTrackMetadata(full_path.?) catch |err| {
+                                    log.err("Failed load media item metadata: {s}", .{err});
+                                    return;
+                                };
+                            } else {
                                 unreachable;
-                            };
+                            }
+                            unreachable;
+                        };
 
-                            log.info("Track title: {s}", .{track_metadata.title});
+                        log.info("Track title: {s}", .{track_metadata.title});
 
-                            _ = track_metadatas.append(track_metadata);
-                            _ = audio_files.append(new_name);
-                        }
-
-                        log.info("Media item: '{s}' {s}", .{ media_item.name.toSlice(), media_item.kind });
+                        _ = track_metadatas.append(track_metadata);
+                        _ = audio_files.append(media_item_filename);
                     }
-                    entry = iterator.next() catch |err| {
-                        log.err("Failed to increment directory entry: {s}", .{err});
-                        return;
-                    };
                 }
+                is_draw_required = true;
             },
             .update_vertices => {
                 // TODO:
@@ -2260,16 +2098,16 @@ fn handleMouseEvents(x: f64, y: f64, is_pressed_left: bool, is_pressed_right: bo
                 defer _ = gpa.deinit();
                 const allocator = gpa.allocator();
 
-                handleUpdateVertices(allocator, &system_actions.items[event_id].payload.update_vertices) catch |err| {
+                handleUpdateVertices(allocator, &action.system_actions.items[event_id].payload.update_vertices) catch |err| {
                     log.err("Failed to update vertices for animation: {s}", .{err});
                     return;
                 };
             },
             .custom => {
-                customActions(action.payload.custom.id);
+                customActions(act.payload.custom.id);
             },
             else => {
-                log.warn("Unmatched event: id {} type {}", .{ event_id, action.action_type });
+                log.warn("Unmatched event: id {} type {}", .{ event_id, act.action_type });
             },
         }
     }
@@ -2277,107 +2115,13 @@ fn handleMouseEvents(x: f64, y: f64, is_pressed_left: bool, is_pressed_right: bo
     is_render_requested = true;
 }
 
-// NOTE: You can have a "Complex" Action type that supports non-primative actions + flags
-//       That will atleast give us the property of not paying for what we don't use.
-
-const ActionType = enum(u8) {
-    none,
-    color_set,
-    update_vertices,
-    custom,
-    audio_play,
-    audio_pause,
-    audio_resume,
-    directory_select,
-    // multi
-};
-
-// If it was likely that you would have to do this multiple times before rendering,
-// it would be worth filling up a buffer full of changes to be made and then doing them all
-// at once after all changes have been triggered
-
-// Limit of 64 is based on alternate_vertex_count being u6
-var inactive_vertices_attachments: FixedBuffer(QuadFace(GenericVertex), 64) = .{};
-
-const VertexRange = packed struct {
-    vertex_begin: u24,
-    vertex_count: u8,
-};
-
-// 2 * 20 = 40 bytes
-var vertex_range_attachments: FixedBuffer(VertexRange, 20) = .{};
-const ActionPayloadColorSet = packed struct {
-    vertex_range_begin: u8,
-    vertex_range_span: u8,
-    color_index: u8,
-};
-
-const ActionPayloadSetAction = packed struct {
-    action_type: ActionType,
-    index: u16,
-};
-
-const ActionPayloadVerticesUpdate = packed struct {
-    loaded_vertex_begin: u10,
-    alternate_vertex_begin: u6,
-    loaded_vertex_count: u4,
-    alternate_vertex_count: u4,
-};
-
-const ActionPayloadRedirect = packed struct {
-    action_1: u12,
-    action_2: u12,
-};
-
-const ActionPayloadAudioResume = packed struct {
-    dummy: u24,
-};
-
-const ActionPayloadAudioPause = packed struct {
-    dummy: u24,
-};
-
-const ActionPayloadCustom = packed struct {
-    id: u16,
-    dummy: u8,
-};
-
-const ActionPayloadAudioPlay = packed struct {
-    id: u16,
-    dummy: u8,
-};
-
-const ActionPayloadDirectorySelect = packed struct {
-    directory_id: u16,
-    dummy: u8,
-};
-
-const ActionPayload = packed union {
-    color_set: ActionPayloadColorSet,
-    audio_play: ActionPayloadAudioPlay,
-    audio_pause: ActionPayloadAudioPause,
-    audio_resume: ActionPayloadAudioResume,
-    update_vertices: ActionPayloadVerticesUpdate,
-    redirect: ActionPayloadRedirect,
-    directory_select: ActionPayloadDirectorySelect,
-    custom: ActionPayloadCustom,
-};
-
-// NOTE: Making this struct packed appears to trigger a compile bug that prevents
-//       arrays from being indexed properly. Probably the alignment is incorrect
-const Action = struct {
-    action_type: ActionType,
-    payload: ActionPayload,
-};
-
-var system_actions: FixedBuffer(Action, 50) = .{};
-
-fn mouseButtonCallback(window: *glfw.Window, button: glfw.MouseButton, action: glfw.Action, mods: glfw.Mods) void {
+// TODO: Rename act
+fn mouseButtonCallback(window: *glfw.Window, button: glfw.MouseButton, act: glfw.Action, mods: glfw.Mods) void {
     _ = action;
     _ = mods;
 
     if (glfw.getCursorPos(window)) |cursor_position| {
-        handleMouseEvents(cursor_position.x, cursor_position.y, button == glfw.MouseButton.left and action == glfw.Action.press, button == glfw.MouseButton.left and action == glfw.Action.press);
+        handleMouseEvents(cursor_position.x, cursor_position.y, button == glfw.MouseButton.left and act == glfw.Action.press, button == glfw.MouseButton.left and act == glfw.Action.press);
     } else |err| {
         log.warn("Failed to get cursor position : {s}", .{err});
     }
@@ -2388,11 +2132,12 @@ fn mousePositionCallback(window: *glfw.Window, x_position: f64, y_position: f64)
     handleMouseEvents(x_position, y_position, false, false);
 }
 
-fn glfwKeyCallback(window: *glfw.Window, key: i32, scancode: i32, action: i32, mods: i32) callconv(.C) void {
+// TODO: Rename act
+fn glfwKeyCallback(window: *glfw.Window, key: i32, scancode: i32, act: i32, mods: i32) callconv(.C) void {
     _ = window;
     _ = key;
     _ = scancode;
-    _ = action;
+    _ = act;
     _ = mods;
 }
 
@@ -2411,12 +2156,12 @@ fn renderCurrentTrackDetails(face_writer: *QuadFaceWriter(GenericVertex), scale_
         const artist_name = audio.current_track.artist[0..audio.current_track.artist_length];
 
         {
-            const placement = geometry.Coordinates2D(ScreenNormalizedBaseType){ .x = -0.95, .y = 0.9 };
+            const placement = geometry.Coordinates2D(ScreenNormalizedBaseType){ .x = -0.95, .y = 0.93 };
             _ = try gui.generateText(GenericVertex, face_writer, track_name, placement, scale_factor, glyph_set, theme.track_title_text, null, texture_layer_dimensions);
         }
 
         {
-            const placement = geometry.Coordinates2D(ScreenNormalizedBaseType){ .x = -0.95, .y = 0.85 };
+            const placement = geometry.Coordinates2D(ScreenNormalizedBaseType){ .x = -0.95, .y = 0.88 };
             _ = try gui.generateText(GenericVertex, face_writer, artist_name, placement, scale_factor, glyph_set, theme.track_artist_text, null, texture_layer_dimensions);
         }
     }
@@ -2441,70 +2186,17 @@ fn update(allocator: Allocator, app: *GraphicsContext) !void {
     };
 
     // Reset event system
-    color_list.clear();
-    system_actions.clear();
+    action.color_list.clear();
+    action.system_actions.clear();
     event_system.clearEvents();
-    vertex_range_attachments.clear();
-    inactive_vertices_attachments.clear();
+    action.vertex_range_attachments.clear();
+    action.inactive_vertices_attachments.clear();
 
     var face_writer = quad_face_writer_pool.create(0, vertices_range_size / @sizeOf(GenericVertex));
 
-    const top_header = blk: {
-        const extent = geometry.Extent2D(ScreenNormalizedBaseType){
-            .x = -1.0,
-            .y = -1.0 + 0.2,
-            .width = 2.0,
-            .height = 0.2,
-        };
-
-        var faces = try face_writer.allocate(1);
-        faces[0] = graphics.generateQuadColored(GenericVertex, extent, theme.header_background);
-
-        break :blk faces;
-    };
-    _ = top_header;
-
-    const top_header_label = blk: {
-        const label = "MUSIC PLAYER -- DEMO APPLICATION";
-        const rendered_label_dimensions = try gui.calculateRenderedTextDimensions(label, glyph_set, scale_factor, 0.0, 4 * scale_factor.horizontal);
-        const label_origin = geometry.Coordinates2D(ScreenNormalizedBaseType){
-            .x = 0.0 - (rendered_label_dimensions.width / 2.0),
-            .y = -0.9 + (rendered_label_dimensions.height / 2.0),
-        };
-
-        break :blk try gui.generateText(GenericVertex, &face_writer, label, label_origin, scale_factor, glyph_set, theme.header_text, null, texture_layer_dimensions);
-    };
-    _ = top_header_label;
-
-    const footer = blk: {
-        const extent = geometry.Extent2D(ScreenNormalizedBaseType){
-            .x = -1.0,
-            .y = 1.0,
-            .width = 2.0,
-            .height = 0.3,
-        };
-        var faces = try face_writer.allocate(1);
-        faces[0] = graphics.generateQuadColored(GenericVertex, extent, theme.footer_background);
-
-        break :blk faces;
-    };
-    _ = footer;
-
-    const progress_bar_width: f32 = 1.0;
-    const progress_bar_margin: f32 = (2.0 - progress_bar_width) / 2.0;
-    const progress_bar_extent = geometry.Extent2D(ScreenNormalizedBaseType){
-        .x = -1.0 + progress_bar_margin,
-        .y = 0.8,
-        .width = progress_bar_width,
-        .height = 8 * scale_factor.vertical,
-    };
-
-    const audio_progress_bar_background = blk: {
-        var faces = try face_writer.allocate(1);
-        faces[0] = graphics.generateQuadColored(GenericVertex, progress_bar_extent, theme.progress_bar_background);
-        break :blk faces;
-    };
-    _ = audio_progress_bar_background;
+    try ui.header.draw(&face_writer, glyph_set, scale_factor, texture_layer_dimensions, theme);
+    try ui.footer.draw(&face_writer, theme);
+    try ui.progress_bar.background.draw(&face_writer, scale_factor, theme);
 
     {
         const track_length_seconds: u32 = audio.output.trackLengthSeconds() catch 1;
@@ -2534,78 +2226,7 @@ fn update(allocator: Allocator, app: *GraphicsContext) !void {
         try renderCurrentTrackDetails(&face_writer, scale_factor);
     }
 
-    const return_button = blk: {
-        const button_placement = geometry.Coordinates2D(ScreenNormalizedBaseType){ .x = -0.95, .y = -0.92 };
-        const button_dimensions = geometry.Dimensions2D(ScreenPixelBaseType){ .width = 50, .height = 25 };
-
-        const button_extent = geometry.Extent2D(ScreenNormalizedBaseType){
-            .x = button_placement.x,
-            .y = button_placement.y,
-            .width = geometry.pixelToNativeDeviceCoordinateRight(button_dimensions.width, scale_factor.horizontal),
-            .height = geometry.pixelToNativeDeviceCoordinateRight(button_dimensions.height, scale_factor.vertical),
-        };
-
-        const faces = try gui.button.generate(
-            GenericVertex,
-            &face_writer,
-            glyph_set,
-            "<",
-            button_extent,
-            scale_factor,
-            theme.return_button_background,
-            theme.return_button_foreground,
-            .center,
-            texture_layer_dimensions,
-        );
-
-        const button_color_index = color_list.append(theme.return_button_background);
-        const on_hover_color_index = color_list.append(theme.return_button_background_hovered);
-
-        // Index of the quad face (I.e Mulples of 4 faces) within the face allocator
-        const widget_index = calculateQuadIndex(vertices, faces);
-
-        // NOTE: system_actions needs to correspond to given on_hover_event_ids here
-        {
-            const on_hover_event_ids = event_system.registerMouseHoverReflexiveEnterAction(button_extent);
-
-            const vertex_attachment_index = @intCast(u8, vertex_range_attachments.append(.{ .vertex_begin = widget_index, .vertex_count = gui.button.face_count }));
-
-            const on_hover_enter_action_payload = ActionPayloadColorSet{
-                .vertex_range_begin = vertex_attachment_index,
-                .vertex_range_span = 1,
-                .color_index = @intCast(u8, on_hover_color_index),
-            };
-
-            const on_hover_exit_action_payload = ActionPayloadColorSet{
-                .vertex_range_begin = vertex_attachment_index,
-                .vertex_range_span = 1,
-                .color_index = @intCast(u8, button_color_index),
-            };
-
-            const on_hover_exit_action = Action{ .action_type = .color_set, .payload = .{ .color_set = on_hover_exit_action_payload } };
-            const on_hover_enter_action = Action{ .action_type = .color_set, .payload = .{ .color_set = on_hover_enter_action_payload } };
-
-            assert(on_hover_event_ids[0] == system_actions.append(on_hover_enter_action));
-            assert(on_hover_event_ids[1] == system_actions.append(on_hover_exit_action));
-        }
-
-        {
-
-            //
-            // When back button is clicked, change to parent directory
-            //
-
-            const on_click_event = event_system.registerMouseLeftPressAction(button_extent);
-
-            const directory_select_parent_action_payload = ActionPayloadDirectorySelect{ .directory_id = parent_directory_id, .dummy = 0 };
-            const directory_select_parent_action = Action{ .action_type = .directory_select, .payload = .{ .directory_select = directory_select_parent_action_payload } };
-
-            assert(on_click_event == system_actions.append(directory_select_parent_action));
-        }
-
-        break :blk faces;
-    };
-    _ = return_button;
+    try ui.directory_up_button.draw(&face_writer, glyph_set, scale_factor, texture_layer_dimensions, theme);
 
     //
     // Dimensions for media pause / play button
@@ -2616,7 +2237,7 @@ fn update(allocator: Allocator, app: *GraphicsContext) !void {
 
     log.info("Rending media button", .{});
 
-    const media_button_placement = geometry.Coordinates2D(ScreenNormalizedBaseType){ .x = 0.0, .y = 0.9 };
+    const media_button_placement = geometry.Coordinates2D(ScreenNormalizedBaseType){ .x = 0.0, .y = 0.935 };
     const media_button_paused_dimensions = geometry.Dimensions2D(ScreenPixelBaseType){ .width = 20, .height = 20 };
     const media_button_resumed_dimensions = geometry.Dimensions2D(ScreenPixelBaseType){ .width = 4, .height = 15 };
 
@@ -2651,8 +2272,8 @@ fn update(allocator: Allocator, app: *GraphicsContext) !void {
     playing_icon_faces[0] = graphics.generateQuadColored(GenericVertex, media_button_resumed_left_extent, theme.media_button);
     playing_icon_faces[1] = graphics.generateQuadColored(GenericVertex, media_button_resumed_right_extent, theme.media_button);
 
-    _ = inactive_vertices_attachments.append(playing_icon_faces[0]);
-    _ = inactive_vertices_attachments.append(playing_icon_faces[1]);
+    _ = action.inactive_vertices_attachments.append(playing_icon_faces[0]);
+    _ = action.inactive_vertices_attachments.append(playing_icon_faces[1]);
 
     //
     // Generate our Media (pause / resume) button
@@ -2675,7 +2296,7 @@ fn update(allocator: Allocator, app: *GraphicsContext) !void {
     // Needs to fit into a u10
     assert(media_button_paused_quad_index <= std.math.pow(u32, 2, 10));
 
-    const media_button_update_icon_action_payload = ActionPayloadVerticesUpdate{
+    const media_button_update_icon_action_payload = action.PayloadVerticesUpdate{
         .loaded_vertex_begin = @intCast(u10, media_button_paused_quad_index),
         .loaded_vertex_count = 1,
         .alternate_vertex_begin = 0,
@@ -2683,8 +2304,8 @@ fn update(allocator: Allocator, app: *GraphicsContext) !void {
     };
 
     // Action type set to .none so that action is disabled initially
-    const media_button_update_icon_action = Action{ .action_type = .none, .payload = .{ .update_vertices = media_button_update_icon_action_payload } };
-    update_media_icon_action_id_opt = system_actions.append(media_button_update_icon_action);
+    const media_button_update_icon_action = action.Action{ .action_type = .none, .payload = .{ .update_vertices = media_button_update_icon_action_payload } };
+    update_media_icon_action_id_opt = action.system_actions.append(media_button_update_icon_action);
 
     assert(update_media_icon_action_id_opt.? == media_button_on_left_click_event_id);
 
@@ -2693,67 +2314,84 @@ fn update(allocator: Allocator, app: *GraphicsContext) !void {
     // TODO: Change extent
     const media_button_on_left_click_event_id_2 = event_system.registerMouseLeftPressAction(media_button_paused_extent);
 
-    const media_button_audio_pause_action_payload = ActionPayloadAudioPause{
-        .dummy = 0,
-    };
+    const media_button_audio_pause_action_payload = action.PayloadAudioPause{};
 
-    const media_button_audio_pause_action = Action{ .action_type = .none, .payload = .{ .audio_pause = media_button_audio_pause_action_payload } };
-    assert(media_button_on_left_click_event_id_2 == system_actions.append(media_button_audio_pause_action));
+    const media_button_audio_pause_action = action.Action{ .action_type = .none, .payload = .{ .audio_pause = media_button_audio_pause_action_payload } };
+    assert(media_button_on_left_click_event_id_2 == action.system_actions.append(media_button_audio_pause_action));
 
     media_button_toggle_audio_action_id = media_button_on_left_click_event_id_2;
 
-    const is_tracks: bool = blk: {
-        for (loaded_media_items.toSlice()) |media_item| {
-            if (media_item.kind == .mp3 or media_item.kind == .flac) break :blk true;
-        }
-        break :blk false;
-    };
-
-    // TODO:
-    var addicional_vertices: usize = 0;
+    const is_tracks = library_navigator.containsAudio();
+    std.log.info("Contains audio: {s}", .{is_tracks});
 
     if (!is_tracks) {
-        for (loaded_media_items.items[0..loaded_media_items.count]) |*media_item, media_i| {
-            const directory_name = media_item.name.toSlice();
+        const screen_width = app.screen_dimensions.width;
 
-            const row_colomn: u32 = 2;
+        const item_width_pixels: u32 = 200;
+        const item_height_pixels: u32 = 100;
+        const item_width: f32 = geometry.pixelToNativeDeviceCoordinateRight(item_width_pixels, scale_factor.horizontal);
+        const item_height: f32 = geometry.pixelToNativeDeviceCoordinateRight(item_height_pixels, scale_factor.vertical);
+        const margin: f32 = geometry.percentage(0.15);
+
+        const minimum_horizonal_spacing: f32 = 0.15;
+        const minimum_horizontal_spacing_pixels: u32 = @floatToInt(u32, minimum_horizonal_spacing * @intToFloat(f32, screen_width));
+
+        // log.info("H spacing: {d}", .{horizontal_spacing_pixels});
+        const vertical_spacing: f32 = 0.04;
+
+        const margin_pixels: u32 = @floatToInt(u32, margin * @intToFloat(f32, screen_width));
+
+        log.info("Margin pixels: {d}", .{margin_pixels});
+
+        const center_horizonal_space_pixels: u32 = screen_width - margin_pixels;
+        log.info("Center space: {d}", .{center_horizonal_space_pixels});
+        log.info("Space / Item: {d}", .{item_width_pixels + minimum_horizontal_spacing_pixels});
+        log.info("H spacing: {d}", .{minimum_horizontal_spacing_pixels});
+
+        const row_colomn: u32 = @floatToInt(u32, (2.0 - (margin * 2)) / item_width + minimum_horizonal_spacing);
+
+        const horizontal_spacing: f32 = (2.0 - ((item_width * @intToFloat(f32, row_colomn)) + (margin * 2))) / @intToFloat(f32, row_colomn - 1);
+        assert(horizontal_spacing > 0.0);
+        const x_increment: f32 = item_width + horizontal_spacing;
+
+        log.info("Rows: {d}", .{row_colomn});
+
+        for (library_navigator.loaded_media_items.items[0..library_navigator.loaded_media_items.count]) |*media_item, media_i| {
+            const directory_name = media_item.root();
+
             const x: u32 = @intCast(u32, media_i) % row_colomn;
             const y: u32 = @intCast(u32, media_i) / row_colomn;
 
-            const margin: f32 = 0.3;
-            const horizontal_spacing: f32 = 0.2;
-            const vertical_spacing: f32 = 0.04;
-            const item_width: f32 = 0.6;
-            const item_height: f32 = 0.15;
-            const x_increment: f32 = item_width + horizontal_spacing;
-
-            const media_item_placement = geometry.Coordinates2D(ScreenNormalizedBaseType){ .x = (-1.0 + margin) + @intToFloat(f32, x) * x_increment, .y = -0.6 + (@intToFloat(f32, y) * (item_height + vertical_spacing)) };
-            // const media_item_dimensions = geometry.Dimensions2D(ScreenPixelBaseType){ .width = 300, .height = 30 };
+            const media_item_placement = geometry.Coordinates2D(ScreenNormalizedBaseType){
+                .x = (-1.0 + margin) + @intToFloat(f32, x) * x_increment,
+                .y = -0.5 + (@intToFloat(f32, y) * (item_height + vertical_spacing)),
+            };
 
             const media_item_extent = geometry.Extent2D(ScreenNormalizedBaseType){
                 .x = media_item_placement.x,
                 .y = media_item_placement.y,
-                .width = item_width, // geometry.pixelToNativeDeviceCoordinateRight(media_item_dimensions.width, scale_factor.horizontal),
-                .height = item_height, // geometry.pixelToNativeDeviceCoordinateRight(media_item_dimensions.height, scale_factor.vertical),
+                .width = item_width,
+                .height = item_height,
             };
 
             const media_item_faces = try gui.button.generate(GenericVertex, &face_writer, glyph_set, directory_name, media_item_extent, scale_factor, theme.folder_background, theme.folder_text, .center, texture_layer_dimensions);
+            _ = media_item_faces;
 
             const media_item_on_left_click_event_id = event_system.registerMouseLeftPressAction(media_item_extent);
 
-            const directory_select_action_payload = ActionPayloadDirectorySelect{
+            const directory_select_action_payload = action.PayloadDirectorySelect{
                 .directory_id = @intCast(u16, media_i),
-                .dummy = 0,
             };
 
-            const directory_select_action = Action{ .action_type = .directory_select, .payload = .{ .directory_select = directory_select_action_payload } };
-            assert(media_item_on_left_click_event_id == system_actions.append(directory_select_action));
-
-            addicional_vertices += media_item_faces.len;
+            const directory_select_action = action.Action{ .action_type = .directory_select, .payload = .{ .directory_select = directory_select_action_payload } };
+            assert(media_item_on_left_click_event_id == action.system_actions.append(directory_select_action));
         }
     }
 
     if (is_tracks) {
+        const track_item_background_color_index = action.color_list.append(theme.track_background);
+        const track_item_on_hover_color_index = action.color_list.append(theme.track_background_hovered);
+
         for (track_metadatas.items[0..track_metadatas.count]) |track_metadata, track_index| {
             const track_name = track_metadata.title[0..track_metadata.title_length];
 
@@ -2785,16 +2423,12 @@ fn update(allocator: Allocator, app: *GraphicsContext) !void {
 
             const track_item_on_left_click_event_id = event_system.registerMouseLeftPressAction(track_item_extent);
 
-            const track_item_audio_play_action_payload = ActionPayloadAudioPlay{
+            const track_item_audio_play_action_payload = action.PayloadAudioPlay{
                 .id = @intCast(u16, track_index),
-                .dummy = 0,
             };
 
-            const track_item_audio_play_action = Action{ .action_type = .audio_play, .payload = .{ .audio_play = track_item_audio_play_action_payload } };
-            assert(track_item_on_left_click_event_id == system_actions.append(track_item_audio_play_action));
-
-            const track_item_background_color_index = color_list.append(theme.track_background);
-            const track_item_on_hover_color_index = color_list.append(theme.track_background_hovered);
+            const track_item_audio_play_action = action.Action{ .action_type = .audio_play, .payload = .{ .audio_play = track_item_audio_play_action_payload } };
+            assert(track_item_on_left_click_event_id == action.system_actions.append(track_item_audio_play_action));
 
             // NOTE: system_actions needs to correspond to given on_hover_event_ids here
             const track_item_on_hover_event_ids = event_system.registerMouseHoverReflexiveEnterAction(track_item_extent);
@@ -2802,27 +2436,25 @@ fn update(allocator: Allocator, app: *GraphicsContext) !void {
             // Index of the quad face (I.e Mulples of 4 faces) within the face allocator
             const track_item_quad_index = calculateQuadIndex(vertices, track_item_faces);
 
-            const track_item_update_color_vertex_attachment_index = @intCast(u8, vertex_range_attachments.append(.{ .vertex_begin = track_item_quad_index, .vertex_count = gui.button.face_count }));
+            const track_item_update_color_vertex_attachment_index = @intCast(u8, action.vertex_range_attachments.append(.{ .vertex_begin = track_item_quad_index, .vertex_count = gui.button.face_count }));
 
-            const track_item_update_color_enter_action_payload = ActionPayloadColorSet{
+            const track_item_update_color_enter_action_payload = action.PayloadColorSet{
                 .vertex_range_begin = track_item_update_color_vertex_attachment_index,
                 .vertex_range_span = 1,
                 .color_index = @intCast(u8, track_item_on_hover_color_index),
             };
 
-            const track_item_update_color_exit_action_payload = ActionPayloadColorSet{
+            const track_item_update_color_exit_action_payload = action.PayloadColorSet{
                 .vertex_range_begin = track_item_update_color_vertex_attachment_index,
                 .vertex_range_span = 1,
                 .color_index = @intCast(u8, track_item_background_color_index),
             };
 
-            const track_item_update_color_enter_action = Action{ .action_type = .color_set, .payload = .{ .color_set = track_item_update_color_enter_action_payload } };
-            const track_item_update_color_exit_action = Action{ .action_type = .color_set, .payload = .{ .color_set = track_item_update_color_exit_action_payload } };
+            const track_item_update_color_enter_action = action.Action{ .action_type = .color_set, .payload = .{ .color_set = track_item_update_color_enter_action_payload } };
+            const track_item_update_color_exit_action = action.Action{ .action_type = .color_set, .payload = .{ .color_set = track_item_update_color_exit_action_payload } };
 
-            assert(track_item_on_hover_event_ids[0] == system_actions.append(track_item_update_color_enter_action));
-            assert(track_item_on_hover_event_ids[1] == system_actions.append(track_item_update_color_exit_action));
-
-            addicional_vertices += track_item_faces.len;
+            assert(track_item_on_hover_event_ids[0] == action.system_actions.append(track_item_update_color_enter_action));
+            assert(track_item_on_hover_event_ids[1] == action.system_actions.append(track_item_update_color_exit_action));
         }
     }
 
@@ -2842,7 +2474,7 @@ fn update(allocator: Allocator, app: *GraphicsContext) !void {
 
     vertex_buffer_count = face_writer.used;
 
-    text_buffer_dirty = false;
+    is_draw_required = false;
     is_render_requested = true;
 
     log.info("Update completed", .{});
@@ -2864,7 +2496,7 @@ fn generateDurationLabels(face_writer: *QuadFaceWriter(GenericVertex), scale_fac
     const progress_bar_margin: f32 = (2.0 - progress_bar_width) / 2.0;
     const progress_bar_extent = geometry.Extent2D(ScreenNormalizedBaseType){
         .x = -1.0 + progress_bar_margin,
-        .y = 0.8,
+        .y = 0.865,
         .width = progress_bar_width,
         .height = 8 * scale_factor.vertical,
     };
@@ -2872,7 +2504,7 @@ fn generateDurationLabels(face_writer: *QuadFaceWriter(GenericVertex), scale_fac
     const track_duration_total = secondsToAudioDurationTime(@intCast(u16, try audio.output.trackLengthSeconds()));
     const track_duration_played = secondsToAudioDurationTime(@intCast(u16, try audio.output.secondsPlayed()));
     const text_color = RGBA(f32){ .r = 0.8, .g = 0.8, .b = 0.8, .a = 1.0 };
-    const margin_from_progress_bar: f32 = 0.02;
+    const margin_from_progress_bar: f32 = 0.03;
     var buffer: [5]u8 = undefined;
 
     //
@@ -2891,7 +2523,7 @@ fn generateDurationLabels(face_writer: *QuadFaceWriter(GenericVertex), scale_fac
     //
 
     const duration_played_label = try std.fmt.bufPrint(&buffer, "{d:0>2}:{d:0>2}", .{ track_duration_played.minutes, track_duration_played.seconds });
-    const duration_played_label_placement = geometry.Coordinates2D(ScreenNormalizedBaseType){ .x = progress_bar_extent.x - margin_from_progress_bar - 0.08, .y = progress_bar_extent.y + (progress_bar_extent.height / 2.0) };
+    const duration_played_label_placement = geometry.Coordinates2D(ScreenNormalizedBaseType){ .x = progress_bar_extent.x - margin_from_progress_bar - 0.09, .y = progress_bar_extent.y + (progress_bar_extent.height / 2.0) };
     const duration_played_label_faces = try gui.generateText(GenericVertex, face_writer, duration_played_label, duration_played_label_placement, scale_factor, glyph_set, text_color, null, texture_layer_dimensions);
 
     assert(duration_played_label_faces.len == 5);
@@ -2900,8 +2532,8 @@ fn generateDurationLabels(face_writer: *QuadFaceWriter(GenericVertex), scale_fac
     audio_progress_label_faces_quad_index = calculateQuadIndex(vertices, duration_total_label_faces);
 }
 
-var audio_progress_label_faces_quad_index: u32 = undefined;
-var audio_progress_bar_faces_quad_index: u32 = undefined;
+var audio_progress_label_faces_quad_index: u16 = undefined;
+var audio_progress_bar_faces_quad_index: u16 = undefined;
 
 fn generateAudioProgressBar(
     face_writer: *QuadFaceWriter(GenericVertex),
@@ -2989,7 +2621,7 @@ fn handleAudioStopped() void {
 
     const extent = geometry.Extent2D(ScreenNormalizedBaseType){
         .x = -1.0 + margin + inner_margin_horizontal,
-        .y = 0.8 - inner_margin_vertical,
+        .y = 0.87 - inner_margin_vertical,
         .width = (width - (inner_margin_horizontal * 2.0)),
         .height = 6 * scale_factor.vertical,
     };
@@ -3005,12 +2637,12 @@ fn handleAudioStopped() void {
 }
 
 fn handleAudioStarted() void {
-    const max_title_length: u32 = 16;
-    const max_artist_length: u32 = 16;
-    const charactor_count: u32 = 10;
-    const maximum_quad_count = charactor_count + max_artist_length + max_title_length;
+    const max_title_length: u8 = 16;
+    const max_artist_length: u8 = 16;
+    const charactor_count: u16 = 10;
+    const maximum_quad_count: u16 = charactor_count + max_artist_length + max_title_length;
 
-    var face_writer = quad_face_writer_pool.create(vertex_buffer_count, maximum_quad_count);
+    var face_writer = quad_face_writer_pool.create(@intCast(u16, vertex_buffer_count), maximum_quad_count);
     const scale_factor = geometry.ScaleFactor2D(f32){
         .horizontal = (2.0 / @intToFloat(f32, screen_dimensions.width)),
         .vertical = (2.0 / @intToFloat(f32, screen_dimensions.height)),
@@ -3039,7 +2671,7 @@ fn appLoop(allocator: Allocator, app: *GraphicsContext) !void {
 
     // Timestamp in milliseconds since last update of audio duration label
     var audio_duration_last_update_ts: i64 = std.time.milliTimestamp();
-    const audio_duraction_update_interval_ms: u64 = 1000;
+    const audio_duration_update_interval_ms: u64 = 1000;
 
     glfw.setCursorPosCallback(app.window, mousePositionCallback);
     glfw.setMouseButtonCallback(app.window, mouseButtonCallback);
@@ -3077,12 +2709,12 @@ fn appLoop(allocator: Allocator, app: *GraphicsContext) !void {
         }
 
         if (framebuffer_resized) {
-            text_buffer_dirty = true;
+            is_draw_required = true;
             framebuffer_resized = false;
             try recreateSwapchain(allocator, app);
         }
 
-        if (text_buffer_dirty) {
+        if (is_draw_required) {
             try update(allocator, app);
             is_render_requested = true;
         }
@@ -3090,16 +2722,9 @@ fn appLoop(allocator: Allocator, app: *GraphicsContext) !void {
         // TODO:
         if (is_render_requested) {
             try app.device_dispatch.deviceWaitIdle(app.logical_device);
-
-            // log.info("Resetting command pool", .{});
             try app.device_dispatch.resetCommandPool(app.logical_device, app.command_pool, .{});
-
-            // log.info("Recording render pass", .{});
             try recordRenderPass(app.*, vertex_buffer_count * 6);
-
-            // log.info("Rendering frame", .{});
             try renderFrame(allocator, app);
-
             is_render_requested = false;
         }
 
@@ -3120,7 +2745,7 @@ fn appLoop(allocator: Allocator, app: *GraphicsContext) !void {
         const is_playing = audio.output.getState() == .playing;
 
         // Each second update the audio duration
-        if (is_playing and frame_start_ms >= (audio_duration_last_update_ts + audio_duraction_update_interval_ms)) {
+        if (is_playing and frame_start_ms >= (audio_duration_last_update_ts + audio_duration_update_interval_ms)) {
             const track_length_seconds: u32 = audio.output.trackLengthSeconds() catch 0;
             const track_played_seconds: u32 = audio.output.secondsPlayed() catch 0;
 
@@ -3150,7 +2775,7 @@ fn appLoop(allocator: Allocator, app: *GraphicsContext) !void {
 
                     const extent = geometry.Extent2D(ScreenNormalizedBaseType){
                         .x = -1.0 + margin + inner_margin_horizontal,
-                        .y = 0.8 - inner_margin_vertical,
+                        .y = 0.87 - inner_margin_vertical,
                         .width = (width - (inner_margin_horizontal * 2.0)),
                         .height = 6 * scale_factor.vertical,
                     };

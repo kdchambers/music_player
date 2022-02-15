@@ -1,3 +1,8 @@
+// SPDX-License-Identifier: GPL-3.0
+// Copyright (c) 2022 Keith Chambers
+// This program is free software: you can redistribute it and/or modify it under the terms
+// of the GNU General Public License as published by the Free Software Foundation, version 3.
+
 const std = @import("std");
 const log = std.log;
 const assert = std.debug.assert;
@@ -16,7 +21,17 @@ const FixedBuffer = memory.FixedBuffer;
 const constants = @import("constants");
 const ScreenNormalizedBaseType = constants.ScreenNormalizedBaseType;
 
-pub const InputEventType = enum(u8) { none, mouse_button_left_press, mouse_button_left_release, mouse_button_right_press, mouse_button_right_release, mouse_hover_enter, mouse_hover_exit, mouse_hover_reflexive_enter, mouse_hover_reflexive_exit };
+pub const InputEventType = enum(u8) {
+    none,
+    mouse_button_left_press,
+    mouse_button_left_release,
+    mouse_button_right_press,
+    mouse_button_right_release,
+    mouse_hover_enter,
+    mouse_hover_exit,
+    mouse_hover_reflexive_enter,
+    mouse_hover_reflexive_exit,
+};
 
 pub const EventFlagsOnMouseBounds = packed struct {
     is_disabled: bool = false,

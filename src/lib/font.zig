@@ -346,8 +346,6 @@ fn getGlyphShape(allocator: Allocator, info: FontInfo, glyph_index: i32) ![]Vert
     if (contour_count_signed > 0) {
         const contour_count: u32 = @intCast(u16, contour_count_signed);
 
-        // log.info("Contour count: {d}", .{contour_count});
-
         var i: usize = 0;
         var j: i32 = 0;
         var m: u32 = 0;
@@ -1618,10 +1616,6 @@ pub fn initializeFont(allocator: Allocator, data: [*]u8) !FontInfo {
                             },
                         }
                     }
-                }
-
-                if (!found) {
-                    log.info("Table entry: '{s}' @ UNMATCHED", .{table_directory.tag});
                 }
 
                 found = false;
