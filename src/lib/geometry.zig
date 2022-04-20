@@ -68,6 +68,32 @@ pub fn ScaleFactor2D(comptime BaseType: type) type {
     };
 }
 
+pub const Axis = enum(u8) {
+    none,
+    horizontal,
+    vertical,
+    diagnal,
+};
+
+pub const AnchorType = enum(u8) {
+    center,
+    bottom_left,
+    bottom_right,
+    top_left,
+    top_right,
+};
+
+pub const ScreenReference = enum(u8) {
+    left,
+    right,
+    top,
+    bottom,
+};
+
+// pub inline fn axis(distance: f32, comptime reference: ScreenReference) f32 {
+// //
+// }
+
 pub fn Scale2D(comptime BaseType: type) type {
     return packed struct {
         x: BaseType,
@@ -82,12 +108,13 @@ pub fn Shift2D(comptime BaseType: type) type {
     };
 }
 
+// TODO: Remove
 pub const percentage = percentageToNativeDeviceCoordinates;
 pub const pixel = pixelToNativeDeviceCoordinateRight;
 
-pub fn percentageToNativeDeviceCoordinates(ndc_right: f32) f32 {
-    std.debug.assert(ndc_right >= -1.0 and ndc_right <= 1.0);
-    return ndc_right / 2.0;
+pub fn percentageToNativeDeviceCoordinates(percent: f32) f32 {
+    std.debug.assert(percent >= -1.0 and percent <= 1.0);
+    return percent / 2.0;
 }
 
 /// Converts a Coordinates2D structure using absolute pixel values to one
@@ -109,5 +136,5 @@ fn coordinates2DPixelToNativeDeviceCoordinateRight(
 /// The scale factor can be calculated using the absolute screen dimensions as follows:
 /// scale_factor = ScaleFactor2D{ .horizontal = 2.0 / screen_dimensions.width, .veritical = 2.0 / screen_dimensions.height};
 pub fn pixelToNativeDeviceCoordinateRight(pixel_value: u32, scale_factor: f32) f32 {
-    return @intToFloat(f32, pixel_value) * scale_factor;
+    return -1.0 + @intToFloat(f32, pixel_value) * scale_factor;
 }

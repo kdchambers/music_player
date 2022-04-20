@@ -18,6 +18,33 @@ const OutputEvent = enum(u8) {
     play_audio,
 };
 
+const Playlist = struct {
+    allocator: std.mem.Allocator,
+    audio_files: *[*:0]const u8,
+    current_index: u32,
+
+    pub fn next() ?[*:0]const u8 {
+        //
+    }
+};
+
+const DirectoryContents = struct {
+    // root_dir
+    // depth_index
+    // count
+    // [] dir_name
+    //
+    // up()
+    // down()
+    //
+};
+
+// onClick(index)
+//  - directoryChanged
+//  - audioInvoked
+// onAudioFinished
+// onDirectoryChanged(new_items)
+
 current_directory: std.fs.Dir,
 loaded_media_items: memory.FixedBuffer(MediaItem, media_item_buffer_size) = .{},
 root_depth: u16 = 0,
@@ -148,7 +175,11 @@ pub fn load(
     const contains_audio: bool = blk: {
         var iterator = self.current_directory.iterate();
         while (try iterator.next()) |entry| {
-            std.debug.assert(entry.name.len <= MediaItem.max_filename_length);
+            if (entry.name.len > MediaItem.max_filename_length) {
+                std.log.err("'{s}' ({d} charactors) is too long", .{ entry.name, entry.name.len });
+                std.debug.assert(entry.name.len <= MediaItem.max_filename_length);
+            }
+
             if (entry.kind == .File) {
                 const extension = parseExtension(entry.name) catch "";
                 if (matchExtension("MP3", extension) or matchExtension("FLAC", extension)) {

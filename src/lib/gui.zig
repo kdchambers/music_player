@@ -5,9 +5,6 @@
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
-const assert = std.debug.assert;
-const log = std.log;
-
 const geometry = @import("geometry");
 const ScaleFactor2D = geometry.ScaleFactor2D;
 const graphics = @import("graphics");
@@ -15,17 +12,163 @@ const QuadFace = graphics.QuadFace;
 const text = @import("text");
 const util = @import("utility");
 const RGBA = graphics.RGBA;
-
-// TODO
+const Color = RGBA(f32);
+const memory = @import("memory.zig");
+const GenericVertex = graphics.GenericVertex;
 const constants = @import("constants");
+const event_system = @import("event_system");
+const FixedAtomicEventQueue = @import("message_queue").FixedAtomicEventQueue;
 
 const TextureNormalizedBaseType = constants.TextureNormalizedBaseType;
 const TexturePixelBaseType = constants.TexturePixelBaseType;
 const ScreenNormalizedBaseType = constants.ScreenNormalizedBaseType;
+const ScreenPixelBaseType = constants.ScreenPixelBaseType;
 
-const event_system = @import("event_system");
+const ScreenScaleFactor = graphics.ScreenScaleFactor(.{ .NDCRightType = ScreenNormalizedBaseType, .PixelType = ScreenPixelBaseType });
 
-var next_widget_id: u32 = 0;
+pub const ActionType = enum(u8) {
+    none,
+    color_set,
+    update_vertices,
+};
+
+// Limit of 64 is based on alternate_vertex_count being u6
+pub var inactive_vertices_attachments: memory.FixedBuffer(QuadFace(GenericVertex), 64) = .{};
+pub var color_list: memory.FixedBuffer(Color, 30) = .{};
+pub var color_list_mutable: memory.FixedBuffer(Color, 10) = .{};
+pub var system_actions: memory.FixedBuffer(Action, 100) = .{};
+pub var vertex_range_attachments: memory.FixedBuffer(VertexRange, 40) = .{};
+
+pub var module_arena: memory.LinearArena = .{};
+pub var vertex_buffer: []GenericVertex = undefined;
+pub var subsystem_id: event_system.SubsystemIndex = undefined;
+
+pub const InternalEvent = enum(u8) {
+    vertices_modified,
+};
+
+pub var message_queue: FixedAtomicEventQueue(InternalEvent, 32) = undefined;
+
+pub fn reset() void {
+    // TODO: Create a reset / clear function
+    _ = message_queue.collect();
+    inactive_vertices_attachments.clear();
+    color_list.clear();
+    system_actions.clear();
+    vertex_range_attachments.clear();
+}
+
+pub fn init(
+    arena: *memory.LinearArena,
+    subsystem: event_system.SubsystemIndex,
+    vertices: []GenericVertex,
+) void {
+    std.debug.assert(subsystem == 2);
+
+    const alignment = 4;
+    const allocation_size = 1024;
+    var sub_allocation = arena.allocateAligned(u8, alignment, allocation_size);
+    module_arena = memory.LinearArena{
+        .memory = sub_allocation,
+        .used = 0,
+    };
+    vertex_buffer = vertices;
+    subsystem_id = subsystem;
+}
+
+pub fn doColorSet(payload: PayloadColorSet) void {
+    const color = color_list.items[payload.color_index];
+    const vertices_begin = vertex_range_attachments.items[payload.vertex_range_begin].vertex_begin * 4;
+    const vertices_end = vertices_begin + (vertex_range_attachments.items[payload.vertex_range_begin].vertex_count * 4);
+
+    std.debug.assert(vertices_end > vertices_begin);
+
+    for (vertex_buffer[vertices_begin..vertices_end]) |*vertex| {
+        vertex.color = color;
+    }
+
+    // TODO: Only add event if it is unique
+    message_queue.add(.vertices_modified) catch |err| {
+        std.log.err("Failed to add .vertices_modified event to gui internal message queue: '{s}'", .{err});
+    };
+}
+
+fn doUpdateVertices(payload: *PayloadVerticesUpdate) void {
+    const loaded_vertex_begin = @intCast(u32, payload.loaded_vertex_begin) * 4;
+    const alternate_quad_begin = payload.alternate_vertex_begin;
+    const loaded_vertex_count = payload.loaded_vertex_count * 4;
+    const alternate_vertex_count = payload.alternate_vertex_count * 4;
+
+    var alternate_base_vertex: [*]GenericVertex = &inactive_vertices_attachments.items[alternate_quad_begin];
+
+    const largest_range_vertex_count = if (alternate_vertex_count > loaded_vertex_count) alternate_vertex_count else loaded_vertex_count;
+
+    std.debug.assert(module_arena.remainingCount() * @sizeOf(GenericVertex) >= largest_range_vertex_count);
+    var temp_swap_buffer = @ptrCast([*]GenericVertex, module_arena.access())[0..largest_range_vertex_count];
+    {
+        var i: u32 = 0;
+        while (i < (largest_range_vertex_count)) : (i += 1) {
+            temp_swap_buffer[i] = vertex_buffer[loaded_vertex_begin + i];
+            vertex_buffer[loaded_vertex_begin + i] = if (i < alternate_vertex_count)
+                alternate_base_vertex[i]
+            else
+                GenericVertex.nullFace()[0];
+        }
+    }
+
+    // Now we need to copy back our swapped out loaded vertices into the alternate vertices buffer
+    for (temp_swap_buffer) |vertex, i| {
+        alternate_base_vertex[i] = vertex;
+    }
+
+    const temporary_vertex_count = payload.loaded_vertex_count;
+    payload.loaded_vertex_count = payload.alternate_vertex_count;
+    payload.alternate_vertex_count = temporary_vertex_count;
+}
+
+pub fn doAction(action_index: event_system.ActionIndex) void {
+    var action = &system_actions.items[@intCast(usize, action_index)];
+    switch (action.action_type) {
+        .color_set => doColorSet(action.payload.color_set),
+        .update_vertices => doUpdateVertices(&action.payload.update_vertices),
+        else => {},
+    }
+}
+
+pub const Payload = packed union {
+    color_set: PayloadColorSet,
+    update_vertices: PayloadVerticesUpdate,
+};
+
+// NOTE: Making this struct packed appears to trigger a compile bug that prevents
+//       arrays from being indexed properly. Probably the alignment is incorrect
+pub const Action = struct {
+    action_type: ActionType,
+    payload: Payload,
+};
+
+pub const VertexRange = packed struct {
+    vertex_begin: u24,
+    vertex_count: u8,
+};
+
+pub const PayloadColorSet = packed struct {
+    vertex_range_begin: u8,
+    vertex_range_span: u8,
+    color_index: u8,
+};
+
+pub const PayloadSetAction = packed struct {
+    action_type: ActionType,
+    index: u16,
+};
+
+pub const PayloadVerticesUpdate = packed struct {
+    loaded_vertex_begin: u10,
+    alternate_vertex_begin: u6,
+    loaded_vertex_count: u4,
+    alternate_vertex_count: u4,
+};
 
 /// Used to allocate QuadFaceWriters that share backing memory
 pub fn QuadFaceWriterPool(comptime VertexType: type) type {
@@ -43,7 +186,7 @@ pub fn QuadFaceWriterPool(comptime VertexType: type) type {
         }
 
         pub fn create(self: *Self, quad_index: u16, quad_size: u16) QuadFaceWriter(VertexType) {
-            assert((quad_index + quad_size) <= self.memory_quad_range);
+            std.debug.assert((quad_index + quad_size) <= self.memory_quad_range);
             return QuadFaceWriter(VertexType).initialize(self.memory_ptr, quad_index, quad_size);
         }
     };
@@ -70,12 +213,22 @@ pub fn QuadFaceWriter(comptime VertexType: type) type {
             };
         }
 
+        pub fn child(self: *Self, start_index: u16, count: u16) QuadFaceWriter(VertexType) {
+            return .{
+                .memory_ptr = @ptrCast([*]QuadFace(VertexType), self.memory_ptr[start_index]),
+                .used = 0,
+                .capacity = count,
+                .quad_index = 0,
+                .pool_index = 0,
+            };
+        }
+
         pub fn indexFromBase(self: Self) u32 {
             return self.quad_index + self.used;
         }
 
         pub fn remaining(self: *Self) u16 {
-            assert(self.capacity >= self.used);
+            std.debug.assert(self.capacity >= self.used);
             return @intCast(u16, self.capacity - self.used);
         }
 
@@ -97,21 +250,104 @@ pub fn QuadFaceWriter(comptime VertexType: type) type {
     };
 }
 
-pub fn Widget(comptime VertexType: type) type {
-    return struct {
-        faces: []QuadFace(VertexType),
-        id: u32,
-    };
-}
-
-pub const WidgetSelection = []u32;
-
-fn nextWidgetId() u32 {
-    next_widget_id += 1;
-    return next_widget_id;
-}
+const DrawReceipt = struct {
+    extent: geometry.Extent2D(ScreenNormalizedBaseType),
+    face_index: u16,
+    face_count: u16,
+};
 
 pub const Alignment = enum { left, right, center };
+
+// I think have a multiple action is a better idea
+// You can also have a custom action
+
+// const VerticalDrawList = struct {
+// const Self = @This();
+// extent: geometry.Extent2D(ScreenNormalizedBaseType),
+// item_extent: geometry.Extent2D(ScreenNormalizedBaseType),
+// item_outer_margin: f32,
+// horizontal_inner_gap: f32,
+// vertical_inner_gap: f32,
+
+// pub fn generate(
+// comptime VertexType: type,
+// face_writer: *QuadFaceWriter(VertexType),
+// track_title_list: []const []const u8,
+// glyph_set: text.GlyphSet,
+// scale_factor: geometry.ScaleFactor2D(ScreenNormalizedBaseType),
+// background_color: Color,
+// text_color: Color,
+// ) !void {
+// const track_item_background_color_index = color_list.append();
+// const track_item_on_hover_color_index = color_list.append(theme.track_background_hovered);
+
+// for (track_title_list) |track_title, track_index| {
+// const track_name = track_title; // track_metadata.title[0..track_metadata.title_length];
+
+// std.log.info("Track name: '{s}'", .{track_name});
+// std.debug.assert(track_name.len > 0);
+
+// const track_item_extent = geometry.Extent2D(ScreenNormalizedBaseType){
+// .x = -0.8,
+// .y = -0.6 + (@intToFloat(f32, track_index) * (30 * scale_factor.vertical)),
+// .width = 600 * scale_factor.horizontal,
+// .height = 30 * scale_factor.vertical,
+// };
+
+// const track_item_quad_index = face_writer.*.used;
+
+// const track_item_faces = try gui.button.generate(
+// GenericVertex,
+// face_writer,
+// glyph_set,
+// track_name,
+// track_item_extent,
+// scale_factor,
+// theme.track_background,
+// theme.track_text,
+// .left,
+// );
+// _ = track_item_faces;
+
+// const track_item_on_left_click_event_id = event_system.registerMouseLeftPressAction(track_item_extent);
+
+// const track_item_audio_play_action_payload = action.PayloadAudioPlay{
+// .id = @intCast(u16, track_index),
+// };
+
+// const track_item_audio_play_action = action.Action{ .action_type = .audio_play, .payload = .{ .audio_play = track_item_audio_play_action_payload } };
+// std.debug.assert(track_item_on_left_click_event_id == action.system_actions.append(track_item_audio_play_action));
+
+// // NOTE: system_actions needs to correspond to given on_hover_event_ids here
+// const track_item_on_hover_event_ids = event_system.registerMouseHoverReflexiveEnterAction(track_item_extent);
+
+// // Index of the quad face (I.e Mulples of 4 faces) within the face allocator
+// // const track_item_quad_index = calculateQuadIndex(vertices, track_item_faces);
+
+// const track_item_update_color_vertex_attachment_index = @intCast(u8, action.vertex_range_attachments.append(
+// .{ .vertex_begin = track_item_quad_index, .vertex_count = gui.button.face_count },
+// ));
+
+// const track_item_update_color_enter_action_payload = action.PayloadColorSet{
+// .vertex_range_begin = track_item_update_color_vertex_attachment_index,
+// .vertex_range_span = 1,
+// .color_index = @intCast(u8, track_item_on_hover_color_index),
+// };
+
+// const track_item_update_color_exit_action_payload = action.PayloadColorSet{
+// .vertex_range_begin = track_item_update_color_vertex_attachment_index,
+// .vertex_range_span = 1,
+// .color_index = @intCast(u8, track_item_background_color_index),
+// };
+
+// const track_item_update_color_enter_action = action.Action{ .action_type = .color_set, .payload = .{ .color_set = track_item_update_color_enter_action_payload } };
+// const track_item_update_color_exit_action = action.Action{ .action_type = .color_set, .payload = .{ .color_set = track_item_update_color_exit_action_payload } };
+
+// std.debug.assert(track_item_on_hover_event_ids[0] == action.system_actions.append(track_item_update_color_enter_action));
+// std.debug.assert(track_item_on_hover_event_ids[1] == action.system_actions.append(track_item_update_color_exit_action));
+// }
+// }
+// };
 
 pub const grid = struct {
     pub fn generate(
@@ -125,8 +361,8 @@ pub const grid = struct {
         const x_increment_scaled: f32 = extent.width / @intToFloat(f32, layout.width);
         const y_increment_scaled: f32 = extent.height / @intToFloat(f32, layout.height);
 
-        assert(layout.height > 0);
-        assert(layout.width > 0);
+        std.debug.assert(layout.height > 0);
+        std.debug.assert(layout.width > 0);
 
         var faces = try face_writer.allocate(layout.height + layout.width - 2);
 
@@ -139,7 +375,7 @@ pub const grid = struct {
                 .height = line_width,
             };
 
-            faces[y] = graphics.generateQuadColored(VertexType, line_extent, color);
+            faces[y] = graphics.generateQuadColored(VertexType, line_extent, color, .bottom_left);
         }
 
         var x: u32 = 0;
@@ -151,7 +387,7 @@ pub const grid = struct {
                 .height = extent.height,
             };
 
-            faces[layout.height - 1 + x] = graphics.generateQuadColored(VertexType, line_extent, color);
+            faces[layout.height - 1 + x] = graphics.generateQuadColored(VertexType, line_extent, color, .bottom_left);
         }
 
         return faces;
@@ -159,30 +395,50 @@ pub const grid = struct {
 };
 
 pub const button = struct {
+    pub const ActionConfig = struct {
+        const null_value = [1]event_system.SubsystemActionIndex{event_system.SubsystemActionIndex.null_value};
+
+        on_hover_color_opt: ?u8 = null,
+        on_hover_action_list: [4]event_system.SubsystemActionIndex = null_value ** 4,
+        on_click_left_action_list: [4]event_system.SubsystemActionIndex = null_value ** 4,
+        on_click_right_action_list: [4]event_system.SubsystemActionIndex = null_value ** 4,
+    };
+
     pub const face_count: u32 = 1;
 
-    // TODO: Support eliding if button dimensions are too small for label
-    // TODO: Don't hardcode non-center alignment, maybe split function
     pub fn generate(
         comptime VertexType: type,
         face_writer: *QuadFaceWriter(VertexType),
         glyph_set: text.GlyphSet,
         label: []const u8,
-        extent: geometry.Extent2D(ScreenNormalizedBaseType),
-        scale_factor: ScaleFactor2D(f32),
+        extent_value: geometry.Extent2D(ScreenNormalizedBaseType),
+        scale_factor: ScreenScaleFactor,
         color: RGBA(f32),
         label_color: RGBA(f32),
         text_alignment: Alignment,
-        texture_dimensions: geometry.Dimensions2D(TexturePixelBaseType),
+        action_config: ActionConfig,
+        anchor_point: graphics.AnchorPoint,
     ) ![]QuadFace(VertexType) {
 
         // TODO: Implement right align
-        assert(text_alignment != .right);
+        std.debug.assert(text_alignment != .right);
 
+        const extent = switch (anchor_point) {
+            .bottom_left => extent_value,
+            .top_left => geometry.Extent2D(ScreenNormalizedBaseType){
+                .x = extent_value.x,
+                .y = extent_value.y + extent_value.height,
+                .width = extent_value.width,
+                .height = extent_value.height,
+            },
+            else => unreachable,
+        };
+
+        const background_face_index = face_writer.used;
         var background_face: *QuadFace(VertexType) = try face_writer.create();
 
         // Background has to be generated first so that it doesn't cover the label text
-        background_face.* = graphics.generateQuadColored(VertexType, extent, color);
+        background_face.* = graphics.generateQuadColored(VertexType, extent, color, .bottom_left);
 
         const line_height = 18.0 * scale_factor.vertical;
         const space_width = 4.0 * scale_factor.horizontal;
@@ -204,10 +460,80 @@ pub const button = struct {
             .y = extent.y - vertical_margin,
         };
 
-        const label_faces = try generateText(VertexType, face_writer, label, label_origin, scale_factor, glyph_set, label_color, null, texture_dimensions);
+        // TODO: Check if there is > 1 action before creating
+        var action_writer = event_system.mouse_event_writer.addExtent(extent);
+
+        {
+            var count: u32 = 0;
+            while (count <= 4 and !action_config.on_click_left_action_list[count].isNull()) {
+                count += 1;
+            }
+            if (count > 0) {
+                action_writer.onClickLeft(action_config.on_click_left_action_list[0..count]);
+            }
+        }
+
+        if (action_config.on_hover_color_opt) |on_hover_color| {
+            const vertex_range_entry_index = vertex_range_attachments.append(.{
+                .vertex_begin = background_face_index,
+                .vertex_count = 1,
+            });
+
+            const normal_color_index: u8 = blk: {
+                for (color_list.toSlice()) |current_color, i| {
+                    if (current_color.isEqual(color)) {
+                        break :blk @intCast(u8, i);
+                    }
+                }
+                break :blk @intCast(u8, color_list.append(color));
+            };
+
+            const hover_enter_action = Action{
+                .action_type = .color_set,
+                .payload = .{
+                    .color_set = .{
+                        .color_index = on_hover_color,
+                        .vertex_range_begin = @intCast(u8, vertex_range_entry_index),
+                        .vertex_range_span = 1,
+                    },
+                },
+            };
+
+            const hover_exit_action = Action{
+                .action_type = .color_set,
+                .payload = .{
+                    .color_set = .{
+                        .color_index = normal_color_index,
+                        .vertex_range_begin = @intCast(u8, vertex_range_entry_index),
+                        .vertex_range_span = 1,
+                    },
+                },
+            };
+
+            const hover_enter_action_index = system_actions.append(hover_enter_action);
+            const hover_exit_action_index = system_actions.append(hover_exit_action);
+
+            std.debug.assert(hover_exit_action_index == (hover_enter_action_index + 1));
+
+            const hover_enter_global_action = [1]event_system.SubsystemActionIndex{.{
+                .subsystem = subsystem_id,
+                .index = @intCast(event_system.ActionIndex, hover_enter_action_index),
+            }};
+
+            const hover_exit_global_action = [1]event_system.SubsystemActionIndex{.{
+                .subsystem = subsystem_id,
+                .index = @intCast(event_system.ActionIndex, hover_exit_action_index),
+            }};
+
+            action_writer.onHoverReflexive(hover_enter_global_action[0..], hover_exit_global_action[0..]);
+            // action_writer.onHoverEnter(hover_enter_global_action[0..]);
+            // action_writer.onHoverExit(hover_exit_global_action[0..]);
+        }
+
+        const label_faces = try generateText(VertexType, face_writer, label, label_origin, scale_factor, glyph_set, label_color, null);
 
         // Memory for background_face and label_face should be contigious
-        assert(@ptrToInt(background_face) == @ptrToInt(label_faces.ptr) - @sizeOf(QuadFace(VertexType)));
+        std.debug.assert(@ptrToInt(background_face) == @ptrToInt(label_faces.ptr) - @sizeOf(QuadFace(VertexType)));
 
         // allocator is guaranteed to allocate linearly, therefore we can create/return
         // a new slice that extends from our background_face to the end of our label_faces
@@ -229,7 +555,7 @@ pub const image = struct {
         image_id: f32,
         extent: geometry.Extent2D(ScreenNormalizedBaseType),
     ) ![]QuadFace(VertexType) {
-        assert(image_id == 1 or image_id == 2);
+        std.debug.assert(image_id == 1 or image_id == 2);
         var image_faces = try face_writer.allocate(1);
 
         image_faces[0][0] =
@@ -299,7 +625,7 @@ pub const image = struct {
 pub fn calculateRenderedTextDimensions(
     text_buffer: []const u8,
     glyph_set: text.GlyphSet,
-    scale_factor: ScaleFactor2D(f32),
+    scale_factor: ScreenScaleFactor,
     line_height: f32,
     space_width: f32,
 ) !geometry.Dimensions2D(ScreenNormalizedBaseType) {
@@ -326,7 +652,7 @@ pub fn calculateRenderedTextDimensions(
                         break :blk x;
                     }
                 }
-                log.err("Charactor not in set '{c}':{d} '{s}'", .{ char, char, text_buffer });
+                std.log.err("Charactor not in set '{c}':{d} '{s}'", .{ char, char, text_buffer });
                 continue;
                 // return error.CharacterNotInSet;
             };
@@ -352,11 +678,10 @@ pub fn generateText(
     face_writer: *QuadFaceWriter(VertexType),
     text_buffer: []const u8,
     origin: geometry.Coordinates2D(ScreenNormalizedBaseType),
-    scale_factor: ScaleFactor2D(f32),
+    scale_factor: ScreenScaleFactor,
     glyph_set: text.GlyphSet,
     color: RGBA(f32),
     line_height_opt: ?f32,
-    texture_dimensions: geometry.Dimensions2D(TexturePixelBaseType),
 ) ![]QuadFace(VertexType) {
     const glyph_length: u16 = blk: {
         var i: u16 = 0;
@@ -406,12 +731,12 @@ pub fn generateText(
                         default_char_index = x;
                     }
                 }
-                log.err("Charactor not in set '{c}' (ascii {d}) in '{s}'", .{ char, char, text_buffer });
+                std.log.err("Charactor not in set '{c}' (ascii {d}) in '{s}'", .{ char, char, text_buffer });
                 break :blk default_char_index;
                 // return error.InvalidCharacter;
             };
 
-            const texture_extent = try glyph_set.imageRegionForGlyph(glyph_index, texture_dimensions);
+            const texture_extent = try glyph_set.imageRegionForGlyph(glyph_index, constants.texture_layer_dimensions);
             const glyph_dimensions = glyph_set.glyph_information[glyph_index].dimensions;
 
             // Positive offset (Glyphs with a descent get shift down)
@@ -427,7 +752,7 @@ pub fn generateText(
                 .height = @intToFloat(f32, glyph_dimensions.height) * scale_factor.vertical,
             };
 
-            vertices[i - skipped_count] = graphics.generateTexturedQuad(VertexType, placement, char_extent, texture_extent);
+            vertices[i - skipped_count] = graphics.generateTexturedQuad(VertexType, placement, char_extent, texture_extent, .bottom_left);
             for (vertices[i - skipped_count]) |*vertex| {
                 vertex.color = color;
             }
@@ -449,11 +774,10 @@ pub fn generateLineMargin(
     face_writer: *QuadFaceWriter(VertexType),
     glyph_set: text.GlyphSet,
     coordinates: geometry.Coordinates2D(ScreenNormalizedBaseType),
-    scale_factor: ScaleFactor2D(f32),
+    scale_factor: ScreenScaleFactor,
     line_start: u16,
     line_count: u16,
     line_height: f32,
-    texture_dimensions: geometry.Dimensions2D(TextureNormalizedBaseType),
 ) ![]QuadFace(VertexType) {
 
     // Loop through lines to calculate how many vertices will be required
@@ -466,7 +790,7 @@ pub fn generateLineMargin(
         break :blk count;
     };
 
-    assert(line_count > 0);
+    std.log.assert(line_count > 0);
     const chars_wide_count: u32 = util.digitCount(line_start + line_count);
 
     var vertex_faces = try face_writer.allocate(quads_required_count);
@@ -477,7 +801,7 @@ pub fn generateLineMargin(
         const line_number = line_start + i;
         const digit_count = util.digitCount(line_number);
 
-        assert(digit_count < 6);
+        std.log.assert(digit_count < 6);
 
         var digit_index: u16 = 0;
         // Traverse digits from least to most significant
@@ -496,7 +820,7 @@ pub fn generateLineMargin(
                 return error.CharacterNotInSet;
             };
 
-            const texture_extent = try glyph_set.imageRegionForGlyph(glyph_index, texture_dimensions);
+            const texture_extent = try glyph_set.imageRegionForGlyph(glyph_index);
 
             const glyph_dimensions = glyph_set.glyph_information[glyph_index].dimensions;
             const base_x_increment = (@intToFloat(f32, glyph_set.glyph_information[glyph_index].advance) / 64.0) * scale_factor.horizontal;
@@ -513,7 +837,7 @@ pub fn generateLineMargin(
                 .height = @intToFloat(f32, glyph_dimensions.height) * scale_factor.vertical,
             };
 
-            vertex_faces[faces_written_count] = graphics.generateTexturedQuad(VertexType, origin, char_extent, texture_extent);
+            vertex_faces[faces_written_count] = graphics.generateTexturedQuad(VertexType, origin, char_extent, texture_extent, .bottom_left);
             for (vertex_faces[faces_written_count]) |*vertex| {
                 vertex.color = .{ .r = 1.0, .g = 1.0, .b = 0.0, .a = 1.0 };
             }

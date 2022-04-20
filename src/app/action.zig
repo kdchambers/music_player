@@ -20,6 +20,12 @@ pub const set_color = struct {
 // NOTE: You can have a "Complex" Action type that supports non-primative actions + flags
 //       That will atleast give us the property of not paying for what we don't use.
 
+// THINK:
+// You need to be able to configure all the valid actions at comptime and then have each widget be
+// able to return
+
+// Or maybe I can expose a global that is used by the library layer
+
 pub const ActionType = enum(u8) {
     none,
     color_set,
@@ -41,10 +47,17 @@ pub const VertexRange = packed struct {
 };
 
 // 2 * 20 = 40 bytes
-pub var vertex_range_attachments: FixedBuffer(VertexRange, 20) = .{};
+pub var vertex_range_attachments: FixedBuffer(VertexRange, 40) = .{};
 pub const PayloadColorSet = packed struct {
     vertex_range_begin: u8,
     vertex_range_span: u8,
+    color_index: u8,
+};
+
+pub const PayloadColorSet2 = packed struct {
+    vertex_range_begin: u8,
+    vertex_range_span: u7,
+    reflexive: bool,
     color_index: u8,
 };
 
@@ -107,4 +120,5 @@ pub const Action = struct {
 };
 
 pub var color_list: FixedBuffer(Color, 30) = undefined;
-pub var system_actions: FixedBuffer(Action, 50) = .{};
+pub var color_list_mutable: FixedBuffer(Color, 10) = undefined;
+pub var system_actions: FixedBuffer(Action, 100) = .{};

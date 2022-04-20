@@ -25,6 +25,11 @@ pub fn build(b: *Builder) void {
     exe.addIncludeDir("/usr/include/");
     exe.addIncludeDir("/usr/local/include");
 
+    const storage_pkg = std.build.Pkg{
+        .name = "storage",
+        .path = .{ .path = lib_src_path ++ "storage.zig" },
+    };
+
     const geometry_pkg = std.build.Pkg{
         .name = "geometry",
         .path = .{ .path = lib_src_path ++ "geometry.zig" },
@@ -44,14 +49,6 @@ pub fn build(b: *Builder) void {
         .name = "LibraryNavigator",
         .path = .{ .path = app_src_path ++ "LibraryNavigator.zig" },
         .dependencies = &[_]Pkg{memory_pkg},
-    };
-
-    const audio_pkg = std.build.Pkg{
-        .name = "audio",
-        .path = .{
-            .path = lib_src_path ++ "audio.zig",
-        },
-        .dependencies = &[_]Pkg{ message_queue_pkg, memory_pkg },
     };
 
     const font_pkg = std.build.Pkg{
@@ -105,6 +102,14 @@ pub fn build(b: *Builder) void {
         .dependencies = &[_]Pkg{ constants_pkg, geometry_pkg, graphics_pkg, memory_pkg },
     };
 
+    const audio_pkg = std.build.Pkg{
+        .name = "audio",
+        .path = .{
+            .path = lib_src_path ++ "audio.zig",
+        },
+        .dependencies = &[_]Pkg{ message_queue_pkg, memory_pkg, event_system_pkg },
+    };
+
     const gen = vkgen.VkGenerateStep.init(b, "deps/vk.xml", "vk.zig");
     const vulkan_pkg = gen.package;
 
@@ -124,6 +129,8 @@ pub fn build(b: *Builder) void {
             constants_pkg,
             text_pkg,
             utility_pkg,
+            event_system_pkg,
+            message_queue_pkg,
         },
     };
 
@@ -138,7 +145,17 @@ pub fn build(b: *Builder) void {
         .path = .{
             .path = app_src_path ++ "ui.zig",
         },
-        .dependencies = &[_]Pkg{ geometry_pkg, graphics_pkg, gui_pkg, constants_pkg, text_pkg, action_pkg, event_system_pkg },
+        .dependencies = &[_]Pkg{
+            audio_pkg,
+            library_navigator_pkg,
+            geometry_pkg,
+            graphics_pkg,
+            gui_pkg,
+            constants_pkg,
+            text_pkg,
+            action_pkg,
+            event_system_pkg,
+        },
     };
 
     const glfw_pkg = std.build.Pkg{
@@ -177,6 +194,7 @@ pub fn build(b: *Builder) void {
         },
     };
 
+    exe.addPackage(storage_pkg);
     exe.addPackage(vulkan_pkg);
     exe.addPackage(text_pkg);
     exe.addPackage(constants_pkg);

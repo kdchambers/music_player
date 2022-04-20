@@ -17,6 +17,7 @@ pub const theme = Theme{
     .header_background = fromInt(40, 34, 49),
     .footer_background = fromInt(40, 34, 49),
     .folder_background = fromInt(80, 84, 85),
+    .folder_hovered = fromInt(80, 184, 85),
     .folder_text = fromInt(200, 200, 200),
     .track_background = fromInt(158, 28, 76),
     .track_background_hovered = fromInt(158, 128, 76),

@@ -131,9 +131,10 @@ pub inline fn getCursorPos(window: *Window) !geometry.Coordinates2D(f64) {
 
 pub fn getInstanceProcAddress(vk_instance: *anyopaque, proc_name: [*:0]const u8) ?VKProc {
     return c.glfwGetInstanceProcAddress(@ptrCast(c.VkInstance, vk_instance), proc_name);
-    // pub extern fn getInstanceProcAddress(instance: vk.Instance, procname: [*:0]const u8) vk.PfnVoidFunction;
-    // if (c.glfwGetInstanceProcAddress(if (vk_instance) |v| @ptrCast(c.VkInstance, v) else null, proc_name)) |proc_address| return proc_address;
-    // return null;
+}
+
+pub fn vulkanSupported() bool {
+    return if (c.glfwVulkanSupported() == c.GLFW_TRUE) true else false;
 }
 
 pub inline fn pollEvents() void {
