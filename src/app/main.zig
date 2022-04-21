@@ -473,10 +473,10 @@ pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
 
-    navigation.subsystem_index = event_system.registerActionHandler(navigation.doAction);
+    navigation.subsystem_index = event_system.registerActionHandler(&navigation.doAction);
 
-    subsystems.audio = event_system.registerActionHandler(audio.doAction);
-    subsystems.gui = event_system.registerActionHandler(gui.doAction);
+    subsystems.audio = event_system.registerActionHandler(&audio.doAction);
+    subsystems.gui = event_system.registerActionHandler(&gui.doAction);
 
     std.debug.assert(navigation.subsystem_index == 0);
     std.debug.assert(subsystems.audio == 1);
@@ -1885,12 +1885,13 @@ fn update(allocator: Allocator, app: *GraphicsContext) !void {
         );
 
         if (navigation.playlist_path_opt) |playlist_path| {
-            {
-                const track_meta_checkpoint = main_arena.checkpoint();
-                const track_view_model = try TrackViewModel.create(&main_arena, playlist_path, 0, 20);
-                track_view_model.log();
-                main_arena.rewindTo(track_meta_checkpoint);
-            }
+            // TODO: 'unable to evulate constant expression error'. Possible compiler bug
+            // {
+            // const track_meta_checkpoint = main_arena.checkpoint();
+            // const track_view_model = try TrackViewModel.create(&main_arena, playlist_path, 0, 20);
+            // track_view_model.log();
+            // main_arena.rewindTo(track_meta_checkpoint);
+            // }
 
             const track_metadata_list = try audio.mp3.loadMetaFromDirectory(&main_arena, playlist_path);
             var track_slice_list: [64][]const u8 = undefined;

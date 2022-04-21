@@ -30,7 +30,7 @@ pub const Action = enum(c_int) {
 };
 
 pub const Mods = packed struct {
-    shift_bit: bool align(@alignOf(c_int)) = false,
+    shift_bit: bool = false,
     control_bit: bool = false,
     alt_bit: bool = false,
     super_bit: bool = false,
@@ -76,7 +76,11 @@ pub const MouseButton = enum(c_int) {
 };
 
 pub const Hint = enum(c_int) { client_api = c.GLFW_CLIENT_API };
-pub const HintClientApi = enum(c_int) { open_gl = c.GLFW_OPENGL_ES_API, open_gl_es = c.GLFW_OPENGL_API, none = c.GLFW_NO_API };
+pub const HintClientApi = enum(c_int) {
+    open_gl = c.GLFW_OPENGL_ES_API,
+    open_gl_es = c.GLFW_OPENGL_API,
+    none = c.GLFW_NO_API,
+};
 
 pub fn HintValueType(comptime hint: Hint) type {
     return switch (hint) {

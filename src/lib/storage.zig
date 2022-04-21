@@ -23,7 +23,7 @@ pub fn Pointer(comptime Type: type) type {
     return struct {
         address: u16,
 
-        pub fn get(self: @This()) Type {
+        pub inline fn get(self: @This()) Type {
             return .{
                 .addr = @ptrCast(@TypeOf(Type.addr), &memory_space[self.address]),
             };

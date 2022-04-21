@@ -48,7 +48,7 @@ test "SubsystemActionIndex size" {
 }
 
 const registered_action_handlers_max: u32 = std.math.maxInt(SubsystemIndex) - 1;
-var registered_action_handlers: [registered_action_handlers_max]ActionHandlerFunction = undefined;
+var registered_action_handlers: [registered_action_handlers_max]*const ActionHandlerFunction = undefined;
 var registered_action_handlers_count: u8 = 0;
 
 pub var mouse_event_writer: MouseEventWriter = undefined;
@@ -255,21 +255,21 @@ const Pattern = packed struct {
     }
 };
 
-pub inline fn registerActionHandler(action_handler_function: ActionHandlerFunction) SubsystemIndex {
+pub inline fn registerActionHandler(action_handler_function: *const ActionHandlerFunction) SubsystemIndex {
     std.debug.assert(registered_action_handlers_count < (std.math.maxInt(SubsystemIndex) + 1));
     registered_action_handlers[registered_action_handlers_count] = action_handler_function;
     registered_action_handlers_count += 1;
     return @intCast(SubsystemIndex, registered_action_handlers_count - 1);
 }
 
-/// Lets you write a list of actions to be triggered for an event type E.g mouse_button_left_press 
-/// EventWriters are bound to the resource they were created with 
+/// Lets you write a list of actions to be triggered for an event type E.g mouse_button_left_press
+/// EventWriters are bound to the resource they were created with
 /// E.g An extent, or pattern
 ///
-/// The workflow is as follows: 
-/// 1. Write a mouse region either as an extent or pattern 
+/// The workflow is as follows:
+/// 1. Write a mouse region either as an extent or pattern
 /// 2. For each event type you want to test for:
-///     2a. Write with list of actions to trigger 
+///     2a. Write with list of actions to trigger
 pub const ResourceEventWriter = struct {
     arena: *memory.LinearArena,
     base: *MouseEventEntryBase,
@@ -471,7 +471,7 @@ pub fn handleMouseEvents(
             std.log.err("Invalid subsystem: {d}", .{action.subsystem});
             std.debug.assert(registered_action_handlers_count > action.subsystem);
         }
-        registered_action_handlers[action.subsystem](action.index);
+        registered_action_handlers[action.subsystem].*(action.index);
     }
 }
 
