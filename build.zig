@@ -22,6 +22,7 @@ pub fn build(b: *Builder) void {
     exe.setTarget(target);
     exe.setBuildMode(mode);
 
+    exe.addIncludeDir("deps/Vulkan-Headers/include");
     exe.addIncludeDir("deps/glfw/include/");
     exe.addIncludeDir("/usr/include/");
     exe.addIncludeDir("/usr/local/include");
@@ -215,7 +216,6 @@ pub fn build(b: *Builder) void {
     exe.addPackage(action_pkg);
     exe.addPackage(library_navigator_pkg);
 
-    // exe.addLibPath("/usr/local/lib");
     exe.linkSystemLibrary("ao");
     exe.linkSystemLibrary("glfw");
     exe.linkSystemLibrary("c");
@@ -223,7 +223,6 @@ pub fn build(b: *Builder) void {
     // TODO: Staticially link or port
     exe.linkSystemLibrary("FLAC");
     exe.linkSystemLibrary("mad");
-    exe.linkSystemLibrary("id3v2");
 
     exe.install();
 

@@ -18,6 +18,14 @@ const geometry = @import("geometry.zig");
 const Scale2D = geometry.Scale2D;
 const Shift2D = geometry.Shift2D;
 
+// TODO:
+pub fn abs(value: f32) f32 {
+    if (value < 0) {
+        return value * -1;
+    }
+    return value;
+}
+
 pub fn getCodepointBitmap(allocator: Allocator, info: FontInfo, scale: Scale2D(f32), codepoint: i32) !Bitmap {
     const shift = Shift2D(f32){ .x = 0.0, .y = 0.0 };
     const offset = Offset2D(u32){ .x = 0, .y = 0 };
@@ -573,13 +581,11 @@ fn getCodepointBitmapSubpixel(allocator: Allocator, info: FontInfo, scale: Scale
 fn getGlyphBitmapBoxSubpixel(info: FontInfo, glyph_index: i32, scale: Scale2D(f32), shift: Shift2D(f32)) !BoundingBox {
     const bounding_box_opt: ?BoundingBox = getGlyphBox(info, glyph_index);
     if (bounding_box_opt) |bounding_box| {
-        const floor = std.math.floor;
-        const ceil = std.math.ceil;
         return BoundingBox{
-            .x0 = @floatToInt(i32, floor(@intToFloat(f32, bounding_box.x0) * scale.x + shift.x)),
-            .y0 = @floatToInt(i32, floor(@intToFloat(f32, -bounding_box.y1) * scale.y + shift.y)),
-            .x1 = @floatToInt(i32, ceil(@intToFloat(f32, bounding_box.x1) * scale.x + shift.x)),
-            .y1 = @floatToInt(i32, ceil(@intToFloat(f32, -bounding_box.y0) * scale.y + shift.y)),
+            .x0 = @floatToInt(i32, @floor(@intToFloat(f32, bounding_box.x0) * scale.x + shift.x)),
+            .y0 = @floatToInt(i32, @floor(@intToFloat(f32, -bounding_box.y1) * scale.y + shift.y)),
+            .x1 = @floatToInt(i32, @ceil(@intToFloat(f32, bounding_box.x1) * scale.x + shift.x)),
+            .y1 = @floatToInt(i32, @ceil(@intToFloat(f32, -bounding_box.y0) * scale.y + shift.y)),
         };
     }
 
@@ -1131,7 +1137,7 @@ fn rasterizeSortedEdges(allocator: Allocator, edges: []Edge, dimensions: Dimensi
                 sum += scanline2[@intCast(usize, i)];
 
                 k = scanline[@intCast(usize, i)] + sum;
-                k = (std.math.absFloat(k) * 255) + 0.5;
+                k = (abs(k) * 255) + 0.5;
                 m = @floatToInt(i32, k);
                 if (m > 255) {
                     m = 255;
@@ -1211,8 +1217,8 @@ fn fillActiveEdgesNew(scanline: [*]f32, scanline_fill: [*]f32, len: i32, active_
             var x0: f32 = edge.fx;
             if (x0 < @intToFloat(f32, len)) {
                 if (x0 >= 0) {
-                    handleClippedEdge(scanline, std.math.floor(x0), edge, x0, y_top, x0, y_bottom);
-                    handleClippedEdge(scanline_fill - 1, std.math.floor(x0) + 1.0, edge, x0, y_top, x0, y_bottom);
+                    handleClippedEdge(scanline, @floor(x0), edge, x0, y_top, x0, y_bottom);
+                    handleClippedEdge(scanline_fill - 1, @floor(x0) + 1.0, edge, x0, y_top, x0, y_bottom);
                 } else {
                     handleClippedEdge(scanline_fill - 1, 0, edge, x0, y_top, x0, y_bottom);
                 }
@@ -1300,7 +1306,7 @@ fn fillActiveEdgesNew(scanline: [*]f32, scanline_fill: [*]f32, len: i32, active_
                     }
 
                     y_crossing += dy * (@intToFloat(f32, x2) - (@intToFloat(f32, x1) + 1.0));
-                    assert(std.math.absFloat(area) <= 1.01);
+                    assert(abs(area) <= 1.01);
 
                     // TODO: (x2 - x2) ???
                     scanline[@intCast(usize, x2)] += area + sign * (1 - (x_bottom - @intToFloat(f32, x2)) / 2.0) * (sy1 - y_crossing);
