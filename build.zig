@@ -22,6 +22,7 @@ pub fn build(b: *Builder) void {
     exe.setTarget(target);
     exe.setBuildMode(mode);
 
+    exe.addIncludeDir("deps/glfw/include/");
     exe.addIncludeDir("/usr/include/");
     exe.addIncludeDir("/usr/local/include");
 

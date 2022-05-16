@@ -4,3 +4,6 @@
 [submodule "deps/zigimg"]
 	path = deps/zigimg
 	url = https://github.com/zigimg/zigimg
+[submodule "deps/glfw"]
+	path = deps/glfw
+	url = https://github.com/glfw/glfw
