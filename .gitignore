@@ -3,4 +3,4 @@ zig-cache/
 zig-out/
 output.wav
 notes.txt
-*.spv
+
