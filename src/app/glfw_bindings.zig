@@ -12,8 +12,7 @@ const geometry = @import("geometry");
 const vk = @import("vulkan");
 
 pub const c = @cImport({
-    @cDefine("GLFW_INCLUDE_NONE", "1");
-    @cDefine("GLFW_INCLUDE_VULKAN", "1");
+    @cDefine("GLFW_INCLUDE_NONE", {});
     @cInclude("GLFW/glfw3.h");
 });
 
@@ -23,6 +22,10 @@ const ScreenPixelBaseType = constants.ScreenPixelBaseType;
 pub const VKProc = fn () callconv(.C) void;
 
 pub const Window = opaque {};
+
+pub extern fn glfwGetInstanceProcAddress(instance: vk.Instance, procname: [*:0]const u8) vk.PfnVoidFunction;
+pub extern fn glfwGetPhysicalDevicePresentationSupport(instance: vk.Instance, pdev: vk.PhysicalDevice, queuefamily: u32) c_int;
+pub extern fn glfwCreateWindowSurface(instance: vk.Instance, window: *c.GLFWwindow, allocation_callbacks: ?*const vk.AllocationCallbacks, surface: *vk.SurfaceKHR) vk.Result;
 
 pub const Action = enum(c_int) {
     release = c.GLFW_RELEASE,
@@ -134,8 +137,8 @@ pub inline fn getCursorPos(window: *Window) !geometry.Coordinates2D(f64) {
     return geometry.Coordinates2D(f64){ .x = xpos, .y = ypos };
 }
 
-pub fn getInstanceProcAddress(vk_instance: *anyopaque, proc_name: [*:0]const u8) ?VKProc {
-    return c.glfwGetInstanceProcAddress(@ptrCast(c.VkInstance, vk_instance), proc_name);
+pub fn getInstanceProcAddress(instance: vk.Instance, proc_name: [*:0]const u8) ?VKProc {
+    return glfwGetInstanceProcAddress(instance, proc_name);
 }
 
 pub fn vulkanSupported() bool {
@@ -160,20 +163,14 @@ pub inline fn shouldClose(window: *Window) bool {
     return (c.glfwWindowShouldClose(@ptrCast(*c.GLFWwindow, window)) == c.GLFW_TRUE);
 }
 
-pub inline fn createWindowSurface(vk_instance: anytype, window: *Window, vk_allocation_callbacks: anytype, vk_surface_khr: anytype) !i32 {
-    const instance: c.VkInstance = switch (@typeInfo(@TypeOf(vk_instance))) {
-        .Enum => @intToPtr(c.VkInstance, @enumToInt(vk_instance)),
-        else => @ptrCast(c.VkInstance, vk_instance),
-    };
-
-    const v = c.glfwCreateWindowSurface(
+pub inline fn createWindowSurface(instance: vk.Instance, window: *Window, surface: *vk.SurfaceKHR) !vk.Result {
+    const v = glfwCreateWindowSurface(
         instance,
         @ptrCast(*c.GLFWwindow, window),
-        if (vk_allocation_callbacks == null) null else @ptrCast(*const c.VkAllocationCallbacks, @alignCast(@alignOf(c.VkAllocationCallbacks), vk_allocation_callbacks)),
-        @ptrCast(*c.VkSurfaceKHR, @alignCast(@alignOf(c.VkSurfaceKHR), vk_surface_khr)),
+        null,
+        surface,
     );
-    if (v == c.VK_SUCCESS) return v;
-
+    if (v == vk.Result.success) return v;
     return error.FailedToCreateWindowSurface;
 }
 

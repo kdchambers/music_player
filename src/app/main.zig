@@ -454,10 +454,10 @@ const help_message =
 ;
 
 // NOTE: For development
-const library_root_path = "../../../../mnt/data/media/music";
+// const library_root_path = "../../../../mnt/data/media/music";
 
 // TODO: You can define this with a env variable
-// const library_root_path = "assets/example_library";
+const library_root_path = "assets/example_library";
 var library_navigator: LibraryNavigator = undefined;
 var track_metadatas_opt: ?[]audio.TrackMetadataIndices = null;
 var audio_files: FixedBuffer([:0]const u8, 20) = undefined;
@@ -556,7 +556,7 @@ pub fn main() !void {
     }, null);
 
     graphics_context.instance_dispatch = try InstanceDispatch.load(graphics_context.instance, vk_proc);
-    _ = try glfw.createWindowSurface(graphics_context.instance, graphics_context.window, null, &graphics_context.surface);
+    _ = try glfw.createWindowSurface(graphics_context.instance, graphics_context.window, &graphics_context.surface);
 
     var present_mode: vk.PresentModeKHR = .fifo_khr;
 
