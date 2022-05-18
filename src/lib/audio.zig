@@ -257,8 +257,8 @@ fn add(arena: *memory.LinearArena, text: []const u8, tag_type: TagType) u16 {
     const result = arena.used;
 
     for (text) |c, i| {
-        if (!std.ascii.isPrint(c)) {
-            std.log.err("Found invalid char at index {d}", .{i});
+        if (c != 0 and !std.ascii.isPrint(c)) {
+            std.log.err("Found invalid char at index {d} '{d}'", .{ i, c });
             std.debug.assert(false);
         }
     }
