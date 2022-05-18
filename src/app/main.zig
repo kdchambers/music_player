@@ -433,8 +433,8 @@ var vertex_buffer: []QuadFace(GenericVertex) = undefined;
 //       All it does it let us determine the number of indices to render
 var vertex_buffer_count: u32 = 0;
 
-const enable_validation_layers = if (builtin.mode == .Debug) true else false;
-const validation_layers = if (enable_validation_layers) [_][*:0]const u8{"VK_LAYER_KHRONOS_validation"} else [*:0]const u8{};
+const enable_validation_layers = false; // if (builtin.mode == .Debug) true else false;
+const validation_layers = if (enable_validation_layers) [1][*:0]const u8{"VK_LAYER_KHRONOS_validation"} else [*:0]const u8{};
 const device_extensions = [_][*:0]const u8{vk.extension_info.khr_swapchain.name};
 
 const max_frames_in_flight: u32 = 2;
@@ -527,14 +527,11 @@ pub fn main() !void {
 
     assert(window_size.width < 10_000 and window_size.height < 10_000);
 
-    const vk_proc = @ptrCast(fn (instance: vk.Instance, procname: [*:0]const u8) callconv(.C) vk.PfnVoidFunction, glfw.getInstanceProcAddress);
-    graphics_context.base_dispatch = try BaseDispatch.load(vk_proc);
+    graphics_context.base_dispatch = try BaseDispatch.load(glfw.glfwGetInstanceProcAddress);
 
-    const instance_extension = try zvk.glfwGetRequiredInstanceExtensions();
-
-    for (instance_extension) |extension| {
-        std.log.info("Extension: {s}", .{extension});
-    }
+    var instance_extension_count: u32 = 0;
+    const instance_extensions = glfw.getRequiredInstanceExtensions(&instance_extension_count);
+    std.debug.assert(instance_extension_count > 0);
 
     graphics_context.instance = try graphics_context.base_dispatch.createInstance(&vk.InstanceCreateInfo{
         .s_type = .instance_create_info,
@@ -544,18 +541,20 @@ pub fn main() !void {
             .application_version = vk.makeApiVersion(0, 0, 1, 0),
             .p_engine_name = constants.application_title,
             .engine_version = vk.makeApiVersion(0, 0, 1, 0),
-            .api_version = vk.makeApiVersion(1, 2, 0, 0),
+            .api_version = vk.API_VERSION_1_2,
             .p_next = null,
         },
-        .enabled_extension_count = @intCast(u32, instance_extension.len),
-        .pp_enabled_extension_names = instance_extension.ptr,
+        .enabled_extension_count = instance_extension_count,
+        .pp_enabled_extension_names = @ptrCast([*]const [*:0]const u8, instance_extensions),
         .enabled_layer_count = if (enable_validation_layers) validation_layers.len else 0,
         .pp_enabled_layer_names = if (enable_validation_layers) &validation_layers else undefined,
         .p_next = null,
         .flags = .{},
     }, null);
 
-    graphics_context.instance_dispatch = try InstanceDispatch.load(graphics_context.instance, vk_proc);
+    graphics_context.instance_dispatch = try InstanceDispatch.load(graphics_context.instance, glfw.glfwGetInstanceProcAddress);
+    errdefer graphics_context.instance_dispatch.destroyInstance(graphics_context.instance, null);
+
     _ = try glfw.createWindowSurface(graphics_context.instance, graphics_context.window, &graphics_context.surface);
 
     var present_mode: vk.PresentModeKHR = .fifo_khr;
@@ -980,7 +979,7 @@ fn setupApplication(allocator: Allocator, app: *GraphicsContext) !void {
     // defer allocator.free(processed_image);
 
     const font_texture_chars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!\"£$%^&*()-_=+[]{};:'@#~,<.>/?\\|";
-    glyph_set = try text.createGlyphSet(allocator, font_texture_chars[0..], texture_layer_dimensions);
+    glyph_set = try text.createGlyphSet(allocator, constants.default_font_path, font_texture_chars[0..], texture_layer_dimensions);
 
     //
     // TODO
@@ -1012,8 +1011,9 @@ fn setupApplication(allocator: Allocator, app: *GraphicsContext) !void {
     // image.copy(RGBA(f32), fitted_image, source_image_extent, &texture_layer, destination_placement, destination_dimensions);
     // }
 
+    const memory_properties = app.instance_dispatch.getPhysicalDeviceMemoryProperties(app.physical_device);
     // var memory_properties = zvk.getDevicePhysicalMemoryProperties(app.physical_device);
-    // zvk.logDevicePhysicalMemoryProperties(memory_properties);
+    zvk.logDevicePhysicalMemoryProperties(memory_properties);
 
     var texture_width: u32 = glyph_set.width();
     var texture_height: u32 = glyph_set.height();
@@ -1073,7 +1073,7 @@ fn setupApplication(allocator: Allocator, app: *GraphicsContext) !void {
         .s_type = vk.StructureType.memory_allocate_info,
         .p_next = null,
         .allocation_size = texture_memory_requirements.size,
-        .memory_type_index = 0,
+        .memory_type_index = 1,
     }, null);
 
     try app.device_dispatch.bindImageMemory(app.logical_device, texture_image, image_memory, 0);
@@ -1197,6 +1197,7 @@ fn setupApplication(allocator: Allocator, app: *GraphicsContext) !void {
     } else {
         // TODO: texture_size_bytes * 2
 
+        std.debug.assert(texture_layer_size * 2 <= texture_memory_requirements.size);
         image_memory_map = @ptrCast([*]u8, (try app.device_dispatch.mapMemory(app.logical_device, image_memory, 0, texture_layer_size * 2, .{})).?);
 
         // if (.success != vk.vkMapMemory(app.logical_device, image_memory, 0, texture_layer_size * 2, 0, @ptrCast(?**anyopaque, &image_memory_map))) {
@@ -1355,7 +1356,7 @@ fn setupApplication(allocator: Allocator, app: *GraphicsContext) !void {
     var mesh_memory = try app.device_dispatch.allocateMemory(app.logical_device, &vk.MemoryAllocateInfo{
         .s_type = vk.StructureType.memory_allocate_info,
         .allocation_size = memory_size,
-        .memory_type_index = 0, // TODO: Audit
+        .memory_type_index = 1, // TODO: Audit
         .p_next = null,
     }, null);
 

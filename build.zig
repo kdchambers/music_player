@@ -215,10 +215,11 @@ pub fn build(b: *Builder) void {
     exe.addPackage(ui_pkg);
     exe.addPackage(action_pkg);
     exe.addPackage(library_navigator_pkg);
+    
+    exe.linkLibC();
 
     exe.linkSystemLibrary("ao");
     exe.linkSystemLibrary("glfw");
-    exe.linkSystemLibrary("c");
 
     // TODO: Staticially link or port
     exe.linkSystemLibrary("FLAC");

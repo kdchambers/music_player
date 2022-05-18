@@ -101,15 +101,13 @@ pub const GlyphSet = struct {
 };
 
 // TODO: Separate image generation to own function
-pub fn createGlyphSet(allocator: Allocator, character_list: []const u8, texture_dimensions: geometry.Dimensions2D(TexturePixelBaseType)) !GlyphSet {
+pub fn createGlyphSet(allocator: Allocator, font_path: [:0]const u8, character_list: []const u8, texture_dimensions: geometry.Dimensions2D(TexturePixelBaseType)) !GlyphSet {
     assert(texture_dimensions.height == 512);
     assert(texture_dimensions.width == 512);
 
     // TODO:
     // Use zig stdlib for loading files
     // Use allocator instead of hardcoded array
-    // Don't use hardcoded system installed font
-    const font_path: [:0]const u8 = "/usr/share/fonts/TTF/Hack-Regular.ttf";
     var ttf_buffer: [1024 * 300]u8 align(64) = undefined;
 
     const file_handle = c.fopen(font_path, "rb");

@@ -15,32 +15,32 @@ const success = vk.Result.success;
 
 // TODO: Add format function for std print instead
 pub fn logDevicePhysicalMemoryProperties(memory_properties: vk.PhysicalDeviceMemoryProperties) void {
-    var heap_count: u32 = memory_properties.memoryHeapCount;
+    var heap_count: u32 = memory_properties.memory_heap_count;
 
     var i: u32 = 0;
     while (i < heap_count) {
         log.info("Heap #{}", .{i});
-        log.info("  Capacity: {} bytes", .{memory_properties.memoryHeaps[i].size});
-        log.info("  Device Local:   {}", .{memory_properties.memoryHeaps[i].flags.deviceLocal});
-        log.info("  Multi Instance: {}", .{memory_properties.memoryHeaps[i].flags.multiInstance});
+        log.info("  Capacity: {} bytes", .{memory_properties.memory_heaps[i].size});
+        log.info("  Device Local:   {}", .{memory_properties.memory_heaps[i].flags.device_local_bit});
+        log.info("  Multi Instance: {}", .{memory_properties.memory_heaps[i].flags.multi_instance_bit});
 
         i += 1;
     }
 
     var memory_type_counter: u32 = 0;
-    var memory_type_count = memory_properties.memoryTypeCount;
+    var memory_type_count = memory_properties.memory_type_count;
 
     while (memory_type_counter < memory_type_count) : (memory_type_counter += 1) {
         log.info("Memory Type #{}", .{memory_type_counter});
-        log.info("  Memory Heap Index: {}", .{memory_properties.memoryTypes[memory_type_counter].heapIndex});
+        log.info("  Memory Heap Index: {}", .{memory_properties.memory_types[memory_type_counter].heap_index});
 
-        const memory_flags = memory_properties.memoryTypes[memory_type_counter].propertyFlags;
-        log.info("  Device Local:     {}", .{memory_flags.deviceLocal});
-        log.info("  Host Visible:     {}", .{memory_flags.hostVisible});
-        log.info("  Host Coherent:    {}", .{memory_flags.hostCoherent});
-        log.info("  Host Cached:      {}", .{memory_flags.hostCached});
-        log.info("  Lazily Allocated: {}", .{memory_flags.lazilyAllocated});
-        log.info("  Protected:        {}", .{memory_flags.protected});
+        const memory_flags = memory_properties.memory_types[memory_type_counter].property_flags;
+        log.info("  Device Local:     {}", .{memory_flags.device_local_bit});
+        log.info("  Host Visible:     {}", .{memory_flags.host_visible_bit});
+        log.info("  Host Coherent:    {}", .{memory_flags.host_coherent_bit});
+        log.info("  Host Cached:      {}", .{memory_flags.host_cached_bit});
+        log.info("  Lazily Allocated: {}", .{memory_flags.lazily_allocated_bit});
+        log.info("  Protected:        {}", .{memory_flags.protected_bit});
     }
 }
 
@@ -52,7 +52,7 @@ pub fn getImageMemoryRequirements(device: vk.Device, image: vk.Image) vk.MemoryR
 
 pub fn getDevicePhysicalMemoryProperties(physical_device: vk.PhysicalDevice) vk.PhysicalDeviceMemoryProperties {
     var memory_properties: vk.PhysicalDeviceMemoryProperties = undefined;
-    vk.vkGetPhysicalDeviceMemoryProperties(physical_device, &memory_properties);
+    vk.getPhysicalDeviceMemoryProperties(physical_device, &memory_properties);
     return memory_properties;
 }
 
