@@ -5,11 +5,6 @@
 
 const std = @import("std");
 const builtin = @import("builtin");
-const os = std.os;
-const fs = std.fs;
-const fmt = std.fmt;
-const log = std.log;
-const assert = std.debug.assert;
 const Allocator = std.mem.Allocator;
 const vk = @import("vulkan");
 const vulkan_config = @import("vulkan_config");
@@ -382,13 +377,13 @@ pub fn main() !void {
     var graphics_context: GraphicsContext = undefined;
 
     glfw.initialize() catch |err| {
-        log.err("Failed to initialized glfw. Error: {s}", .{err});
+        std.log.err("Failed to initialized glfw. Error: {s}", .{err});
         return;
     };
     defer glfw.terminate();
 
     if (!glfw.vulkanSupported()) {
-        log.err("Vulkan is required", .{});
+        std.log.err("Vulkan is required", .{});
         return;
     }
 
@@ -401,7 +396,7 @@ pub fn main() !void {
     graphics_context.screen_dimensions.width = window_size.width;
     graphics_context.screen_dimensions.height = window_size.height;
 
-    assert(window_size.width < 10_000 and window_size.height < 10_000);
+    std.debug.assert(window_size.width < 10_000 and window_size.height < 10_000);
 
     graphics_context.base_dispatch = try BaseDispatch.load(glfw.glfwGetInstanceProcAddress);
 
@@ -479,7 +474,7 @@ pub fn main() !void {
 
                     const max_family_queues: u32 = 16;
                     if (queue_family_count > max_family_queues) {
-                        log.warn("Some family queues for selected device ignored", .{});
+                       std.log.warn("Some family queues for selected device ignored", .{});
                     }
 
                     var queue_families: [max_family_queues]vk.QueueFamilyProperties = undefined;
@@ -632,7 +627,7 @@ pub fn main() !void {
     cleanupSwapchain(allocator, &graphics_context);
     clean(allocator, &graphics_context);
 
-    log.info("Terminated cleanly", .{});
+    std.log.info("Terminated cleanly", .{});
 }
 
 // TODO:
@@ -656,13 +651,13 @@ fn recreateSwapchain(allocator: Allocator, app: *GraphicsContext) !void {
     // TODO: Find a better synchronization method
     try app.device_dispatch.deviceWaitIdle(app.logical_device);
 
-    log.info("Recreating swapchain", .{});
+    std.log.info("Recreating swapchain", .{});
 
     //
     // Cleanup swapchain and associated images
     //
 
-    assert(app.command_buffers.len > 0);
+    std.debug.assert(app.command_buffers.len > 0);
 
     app.device_dispatch.freeCommandBuffers(
         app.logical_device,
@@ -786,7 +781,7 @@ fn recreateSwapchain(allocator: Allocator, app: *GraphicsContext) !void {
     app.command_buffers = try allocateCommandBuffers(allocator, app.*, @intCast(u32, app.swapchain_images.len));
     try recordRenderPass(app.*, vertex_buffer_count * 6);
 
-    log.info("Swapchain recreated", .{});
+    std.log.info("Swapchain recreated", .{});
 }
 
 fn setupApplication(allocator: Allocator, app: *GraphicsContext) !void {
@@ -894,7 +889,7 @@ fn setupApplication(allocator: Allocator, app: *GraphicsContext) !void {
     var texture_width: u32 = glyph_set.width();
     var texture_height: u32 = glyph_set.height();
 
-    log.info("Glyph dimensions: {}x{}", .{ texture_width, texture_height });
+    std.log.info("Glyph dimensions: {}x{}", .{ texture_width, texture_height });
 
     // const font_bitmap_extent = geometry.Extent2D(TexturePixelBaseType){
     // .x = 0,
@@ -983,7 +978,7 @@ fn setupApplication(allocator: Allocator, app: *GraphicsContext) !void {
     //       Instead of the uploaded memory
     const is_staging_buffer_required: bool = false;
     if (is_staging_buffer_required) {
-        assert(false);
+        std.debug.assert(false);
 
         var staging_buffer: vk.Buffer = try zvk.createBuffer(app.logical_device, .{
             .p_next = null,
@@ -1154,12 +1149,12 @@ fn setupApplication(allocator: Allocator, app: *GraphicsContext) !void {
     const surface_capabilities: vk.SurfaceCapabilitiesKHR = try app.instance_dispatch.getPhysicalDeviceSurfaceCapabilitiesKHR(app.physical_device, app.surface);
 
     if (surface_capabilities.current_extent.width == 0xFFFFFFFF or surface_capabilities.current_extent.height == 0xFFFFFFFF) {
-        log.info("Getting framebuffer size", .{});
+        std.log.info("Getting framebuffer size", .{});
 
         const window_size = glfw.getFramebufferSize(app.window);
-        log.info("Screen size: {d}x{d}", .{ window_size.width, window_size.height });
+        std.log.info("Screen size: {d}x{d}", .{ window_size.width, window_size.height });
 
-        assert(window_size.width < 10_000 and window_size.height < 10_000);
+        std.debug.assert(window_size.width < 10_000 and window_size.height < 10_000);
 
         if (window_size.width <= 0 or window_size.height <= 0) {
             return error.InvalidScreenDimensions;
@@ -1195,7 +1190,7 @@ fn setupApplication(allocator: Allocator, app: *GraphicsContext) !void {
 
     app.swapchain_images = try zvk.getSwapchainImagesKHR(DeviceDispatch, app.device_dispatch, allocator, app.logical_device, app.swapchain);
 
-    log.info("Swapchain images: {d}", .{app.swapchain_images.len});
+    std.log.info("Swapchain images: {d}", .{app.swapchain_images.len});
 
     // TODO: Duplicated code
     app.swapchain_image_views = try allocator.alloc(vk.ImageView, app.swapchain_images.len);
@@ -1225,7 +1220,7 @@ fn setupApplication(allocator: Allocator, app: *GraphicsContext) !void {
         image_view.* = try app.device_dispatch.createImageView(app.logical_device, &image_view_create_info, null);
     }
 
-    assert(vertices_range_index_begin + vertices_range_size <= memory_size);
+    std.debug.assert(vertices_range_index_begin + vertices_range_size <= memory_size);
 
     // Memory used to store vertices and indices
 
@@ -1350,7 +1345,7 @@ fn setupApplication(allocator: Allocator, app: *GraphicsContext) !void {
     app.vertex_shader_module = try createVertexShaderModule(app.*);
     app.fragment_shader_module = try createFragmentShaderModule(app.*);
 
-    assert(app.swapchain_images.len > 0);
+    std.debug.assert(app.swapchain_images.len > 0);
     app.command_buffers = try allocateCommandBuffers(allocator, app.*, @intCast(u32, app.swapchain_images.len));
 
     app.render_pass = try createRenderPass(app.*);
@@ -1364,7 +1359,7 @@ fn setupApplication(allocator: Allocator, app: *GraphicsContext) !void {
 }
 
 fn swapTexture(app: *GraphicsContext) !void {
-    log.info("SwapTexture begin", .{});
+    std.log.info("SwapTexture begin", .{});
 
     const command_pool = try zvk.createCommandPool(app.logical_device, vk.CommandPoolCreateInfo{
         .s_type = vk.StructureType.COMMAND_POOL_CREATE_INFO,
@@ -1440,14 +1435,14 @@ fn swapTexture(app: *GraphicsContext) !void {
             return error.DeviceWaitIdleFailed;
         }
 
-        log.info("SwapTexture copy", .{});
+        std.log.info("SwapTexture copy", .{});
 
         // TODO
         const second_image: []RGBA(f32) = undefined;
         @memcpy(image_memory_map + texture_size_bytes, @ptrCast([*]u8, second_image.?), texture_size_bytes);
     }
 
-    log.info("SwapTexture end", .{});
+    std.log.info("SwapTexture end", .{});
 
     {
         var command_buffer = try zvk.allocateCommandBuffer(app.logical_device, vk.CommandBufferAllocateInfo{
@@ -1545,18 +1540,18 @@ fn handleAudioPlay(allocator: Allocator, action_payload: action.PayloadAudioPlay
 
     const kind = library_navigator.loaded_media_items.items[action_payload.id].fileType();
 
-    log.info("Playing track {s}", .{library_navigator.loaded_media_items.items[action_payload.id].root()});
-    log.info("Playing path {s}", .{full_path});
+    std.log.info("Playing track {s}", .{library_navigator.loaded_media_items.items[action_payload.id].root()});
+    std.log.info("Playing path {s}", .{full_path});
 
     switch (kind) {
         .mp3 => {
             audio.mp3.playFile(allocator, full_path.?) catch |err| {
-                log.err("Failed to play music: {s}", .{err});
+                std.log.err("Failed to play music: {s}", .{err});
             };
         },
         .flac => {
             audio.flac.playFile(allocator, full_path.?) catch |err| {
-                log.err("Failed to play music: {s}", .{err});
+                std.log.err("Failed to play music: {s}", .{err});
             };
         },
         else => {
@@ -1588,7 +1583,7 @@ fn handleAudioPlay(allocator: Allocator, action_payload: action.PayloadAudioPlay
         action.system_actions.items[update_media_icon_action_id].action_type = .update_vertices;
     }
 
-    log.info("Audio play", .{});
+    std.log.info("Audio play", .{});
     action.system_actions.items[media_button_toggle_audio_action_id].action_type = .audio_pause;
 
     // This is for audio duration labels
@@ -1613,7 +1608,7 @@ fn mouseButtonCallback(window: *glfw.Window, button: glfw.MouseButton, act: glfw
 
         event_system.handleMouseEvents(position, is_pressed_left, is_pressed_right);
     } else |err| {
-        log.warn("Failed to get cursor position : {s}", .{err});
+        std.log.warn("Failed to get cursor position : {s}", .{err});
     }
 }
 
@@ -1665,10 +1660,10 @@ fn update(allocator: Allocator, app: *GraphicsContext) !void {
     _ = app;
     _ = allocator;
 
-    log.info("Update called", .{});
+    std.log.info("Update called", .{});
 
-    assert(screen_dimensions.width > 0);
-    assert(screen_dimensions.height > 0);
+    std.debug.assert(screen_dimensions.width > 0);
+    std.debug.assert(screen_dimensions.height > 0);
 
     vertex_buffer_count = 0;
 
@@ -1803,7 +1798,7 @@ fn update(allocator: Allocator, app: *GraphicsContext) !void {
     is_draw_required = false;
     is_render_requested = true;
 
-    log.info("Update completed", .{});
+    std.log.info("Update completed", .{});
 
     event_system.mouse_event_writer.print();
 }
@@ -1891,7 +1886,7 @@ fn generateAudioProgressBar(
     color: RGBA(f32),
     extent: geometry.Extent2D(ScreenNormalizedBaseType),
 ) ![]QuadFace(GenericVertex) {
-    assert(progress >= 0.0 and progress <= 1.0);
+    std.debug.assert(progress >= 0.0 and progress <= 1.0);
     const progress_extent = geometry.Extent2D(ScreenNormalizedBaseType){
         .x = extent.x,
         .y = extent.y,
@@ -1984,18 +1979,18 @@ fn handleAudioFinished() void {
 
     const kind = library_navigator.loaded_media_items.items[current_audio_index].fileType();
 
-    log.info("Playing track {s}", .{library_navigator.loaded_media_items.items[current_audio_index].root()});
-    log.info("Playing path {s}", .{full_path});
+    std.log.info("Playing track {s}", .{library_navigator.loaded_media_items.items[current_audio_index].root()});
+    std.log.info("Playing path {s}", .{full_path});
 
     switch (kind) {
         .mp3 => {
             audio.mp3.playFile(allocator, full_path.?) catch |err| {
-                log.err("Failed to play music: {s}", .{err});
+                std.log.err("Failed to play music: {s}", .{err});
             };
         },
         .flac => {
             audio.flac.playFile(allocator, full_path.?) catch |err| {
-                log.err("Failed to play music: {s}", .{err});
+                std.log.err("Failed to play music: {s}", .{err});
             };
         },
         else => {
@@ -2075,7 +2070,7 @@ fn appLoop(allocator: Allocator, app: *GraphicsContext) !void {
     const target_fps = 30;
     const target_ms_per_frame: u32 = 1000 / target_fps;
 
-    log.info("Target MS / frame: {d}", .{target_ms_per_frame});
+    std.log.info("Target MS / frame: {d}", .{target_ms_per_frame});
 
     // Timestamp in milliseconds since last update of audio duration label
     var audio_duration_last_update_ts: i64 = std.time.milliTimestamp();
@@ -2174,7 +2169,7 @@ fn appLoop(allocator: Allocator, app: *GraphicsContext) !void {
 
         // TODO: I think the loop is running less than 1ms so you should update
         //       to nanosecond precision
-        assert(frame_duration_ms >= 0);
+        std.debug.assert(frame_duration_ms >= 0);
 
         if (frame_duration_ms >= target_ms_per_frame) {
             continue;
@@ -2229,7 +2224,7 @@ fn appLoop(allocator: Allocator, app: *GraphicsContext) !void {
             // }
         }
 
-        assert(target_ms_per_frame > frame_duration_ms);
+        std.debug.assert(target_ms_per_frame > frame_duration_ms);
         const remaining_ms: u32 = target_ms_per_frame - @intCast(u32, frame_duration_ms);
         std.time.sleep(remaining_ms * 1000 * 1000);
     }
@@ -2241,10 +2236,10 @@ fn recordRenderPass(
     app: GraphicsContext,
     indices_count: u32,
 ) !void {
-    assert(app.command_buffers.len > 0);
-    assert(app.swapchain_images.len == app.command_buffers.len);
-    assert(app.screen_dimensions.width == app.swapchain_extent.width);
-    assert(app.screen_dimensions.height == app.swapchain_extent.height);
+    std.debug.assert(app.command_buffers.len > 0);
+    std.debug.assert(app.swapchain_images.len == app.command_buffers.len);
+    std.debug.assert(app.screen_dimensions.width == app.swapchain_extent.width);
+    std.debug.assert(app.screen_dimensions.height == app.swapchain_extent.height);
 
     const clear_color = theme.navigation_background;
     const clear_colors = [1]vk.ClearValue{
@@ -2300,7 +2295,7 @@ fn renderFrame(allocator: Allocator, app: *GraphicsContext) !void {
     var result = acquire_image_result.result;
 
     if (result == .error_out_of_date_khr) {
-        log.info("Swapchain out of date; Recreating..", .{});
+        std.log.info("Swapchain out of date; Recreating..", .{});
         try recreateSwapchain(allocator, app);
         return;
     } else if (result != .success and result != .suboptimal_khr) {
@@ -2902,7 +2897,7 @@ fn createGraphicsPipeline(app: GraphicsContext, pipeline_layout: vk.PipelineLayo
 }
 
 fn createFramebuffers(allocator: Allocator, app: GraphicsContext) ![]vk.Framebuffer {
-    assert(app.swapchain_image_views.len > 0);
+    std.debug.assert(app.swapchain_image_views.len > 0);
     var framebuffer_create_info = vk.FramebufferCreateInfo{
         .s_type = vk.StructureType.framebuffer_create_info,
         .render_pass = app.render_pass,
@@ -2928,7 +2923,7 @@ fn createFramebuffers(allocator: Allocator, app: GraphicsContext) ![]vk.Framebuf
 }
 
 fn allocateCommandBuffers(allocator: Allocator, app: GraphicsContext, count: u32) ![]vk.CommandBuffer {
-    assert(count > 0);
+    std.debug.assert(count > 0);
     const command_buffer_allocate_info = vk.CommandBufferAllocateInfo{
         .s_type = vk.StructureType.command_buffer_allocate_info,
         .command_pool = app.command_pool,
@@ -2943,7 +2938,7 @@ fn allocateCommandBuffers(allocator: Allocator, app: GraphicsContext, count: u32
 }
 
 fn cleanupSwapchain(allocator: Allocator, app: *GraphicsContext) void {
-    log.info("Cleaning swapchain", .{});
+    std.log.info("Cleaning swapchain", .{});
 
     app.device_dispatch.freeCommandBuffers(
         app.logical_device,
