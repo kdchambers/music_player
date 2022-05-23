@@ -13,6 +13,8 @@ const event_system = @import("event_system");
 const storage = @import("storage");
 const String = storage.String;
 
+pub var subsystem_index: event_system.SubsystemIndex = event_system.null_subsystem_index;
+
 const FixedAtomicEventQueue = @import("message_queue").FixedAtomicEventQueue;
 
 const mad = @cImport({
@@ -32,6 +34,11 @@ const id3v2 = @cImport({
     @cInclude("id3v2lib.h");
 });
 
+// NOTE: Failed to include
+// const c = @cImport({
+//     @cInclude("errno.h");
+// });
+
 pub const TrackMetadata = struct {
     title_length: u32,
     artist_length: u32,
@@ -40,7 +47,7 @@ pub const TrackMetadata = struct {
 };
 
 pub fn doAction(action_index: event_system.ActionIndex) void {
-    if (input_event_buffer.buffer[action_index] == .play_requested) {
+    if (action_list.items[action_index] == .play) {
         const path_index = loaded_tracks.items[action_index];
         const absolute_path = storage.SubPath.interface.absolutePathZ(path_index) catch |err| {
             std.log.err("Failed to create path to audio file: {s}", .{err});
@@ -198,8 +205,16 @@ pub const InputEvent = enum(u8) {
     audio_source_changed,
 };
 
+pub const Action = enum(u8) {
+    play,
+    pause,
+    @"resume",
+};
+
 pub var input_event_buffer: FixedAtomicEventQueue(InputEvent, 10) = .{};
 pub var output_event_buffer: FixedAtomicEventQueue(AudioEvent, 10) = .{};
+
+var action_list: memory.FixedBuffer(Action, 20) = .{};
 var loaded_tracks: memory.FixedBuffer(storage.SubPath.Index, 20) = .{};
 
 pub var current_track: TrackMetadata = undefined;
@@ -211,10 +226,10 @@ fn ensureAscii(text: *[]u8) u32 {
     var last_was_null: bool = false;
 
     while (read_index < text.len) : (read_index += 1) {
-        const c = text.*[read_index];
+        const char = text.*[read_index];
 
-        if (!std.ascii.isPrint(c)) {
-            if (c == 0) {
+        if (!std.ascii.isPrint(char)) {
+            if (char == 0) {
                 if (last_was_null == true) {
                     return write_index;
                 }
@@ -226,7 +241,7 @@ fn ensureAscii(text: *[]u8) u32 {
         }
         last_was_null = false;
 
-        text.*[write_index] = c;
+        text.*[write_index] = char;
         write_index += 1;
     }
 
@@ -269,9 +284,9 @@ fn find(mem: []const u8, tag_type: TagType, needle_text: []const u8, max_count: 
 fn add(arena: *memory.LinearArena, text: []const u8, tag_type: TagType) u16 {
     const result = arena.used;
 
-    for (text) |c, i| {
-        if (c != 0 and !std.ascii.isPrint(c)) {
-            std.log.err("Found invalid char at index {d} '{d}'", .{ i, c });
+    for (text) |char, i| {
+        if (char != 0 and !std.ascii.isPrint(char)) {
+            std.log.err("Found invalid char at index {d} '{d}'", .{ i, char });
             std.debug.assert(false);
         }
     }
@@ -299,9 +314,8 @@ fn add(arena: *memory.LinearArena, text: []const u8, tag_type: TagType) u16 {
 
 pub const mp3 = struct {
     pub fn doPlayAudio(path: storage.SubPath.Index) event_system.ActionIndex {
-        // TODO:
         _ = loaded_tracks.append(path);
-        return input_event_buffer.add(.play_requested);
+        return @intCast(event_system.ActionIndex, action_list.append(.play));
     }
 
     const LoadMetaFromFileFunctionConfig = struct {
@@ -958,6 +972,7 @@ pub const mp3 = struct {
             return error.ReadFileFailed;
         }
 
+        std.log.info("Initializing aolib..", .{});
         try output.init();
         active_thread_handle = try std.Thread.spawn(.{}, decode, .{&current_audio_buffer});
 
@@ -1201,16 +1216,57 @@ pub const output = struct {
                 .rate = 44100,
                 .byte_format = ao.AO_FMT_LITTLE,
             };
-            var default_driver: i32 = 0;
 
             ao.ao_initialize();
-            default_driver = ao.ao_default_driver_id();
 
-            device = ao.ao_open_live(default_driver, &format, null);
-            if (device == null) {
-                log.err("Failed to open ao library", .{});
-                return error.InitializeAoFailed;
-            }
+            device = blk: {
+                var dev: ?*ao.ao_device = null;
+                var driver: i32 = undefined;
+
+                driver = ao.ao_default_driver_id();
+                if (driver >= 0) {
+                    dev = ao.ao_open_live(driver, &format, null);
+                    if (dev != null) {
+                        break :blk dev;
+                    }
+                }
+
+                driver = ao.ao_driver_id("pulse");
+                if (driver >= 0) {
+                    dev = ao.ao_open_live(driver, &format, null);
+                    if (dev != null) {
+                        break :blk dev;
+                    }
+                }
+
+                driver = ao.ao_driver_id("alsa");
+                if (driver >= 0) {
+                    dev = ao.ao_open_live(driver, &format, null);
+                    if (dev != null) {
+                        break :blk dev;
+                    }
+                }
+                driver = ao.ao_driver_id("sndio");
+                if (driver >= 0) {
+                    dev = ao.ao_open_live(driver, &format, null);
+                    if (dev != null) {
+                        break :blk dev;
+                    }
+                }
+                driver = ao.ao_driver_id("oss");
+                if (driver >= 0) {
+                    dev = ao.ao_open_live(driver, &format, null);
+                    if (dev != null) {
+                        break :blk dev;
+                    }
+                }
+
+                return error.FailedToOpenDriver;
+            };
+
+            // TODO:
+            // const driver_info = ao.ao_driver_info(driver);
+            // std.log.info("Audio driver: {s}", .{driver_info[0].name});
 
             try output_event_buffer.add(.initialized);
         }

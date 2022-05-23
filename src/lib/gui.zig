@@ -396,7 +396,7 @@ pub const grid = struct {
 
 pub const button = struct {
     pub const ActionConfig = struct {
-        const null_value = [1]event_system.SubsystemActionIndex{event_system.SubsystemActionIndex.null_value};
+        pub const null_value = [1]event_system.SubsystemActionIndex{event_system.SubsystemActionIndex.null_value};
 
         on_hover_color_opt: ?u8 = null,
         on_hover_action_list: [4]event_system.SubsystemActionIndex = null_value ** 4,

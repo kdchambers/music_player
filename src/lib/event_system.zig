@@ -20,7 +20,9 @@ pub const ActionIndex = u12;
 pub const SubsystemIndex = u4;
 
 pub const ActionHandlerFunction = fn (ActionIndex) void;
-pub const null_action_index = std.math.maxInt(ActionIndex);
+
+pub const null_action_index: ActionIndex = std.math.maxInt(ActionIndex);
+pub const null_subsystem_index: SubsystemIndex = std.math.maxInt(SubsystemIndex);
 
 pub const SubsystemActionRange = packed struct {
     subsystem: SubsystemIndex,

@@ -130,10 +130,10 @@ pub const AbsolutePath = struct {
         };
 
         const allocation_size_bytes = path_string.len + @sizeOf(u16) + @sizeOf(u16) + additional_space;
-
         var allocation = arena.allocateAligned(u8, 2, @intCast(u16, allocation_size_bytes));
 
-        @ptrCast(*u16, @alignCast(2, &allocation[length_index])).* = @intCast(u16, path_string.len);
+        const base_length = @intCast(u16, path_string.len);
+        @ptrCast(*u16, @alignCast(2, &allocation[length_index])).* = if (is_terminator_required) base_length + 1 else base_length;
         @ptrCast(*u16, @alignCast(2, &allocation[writable_memory_size_index])).* = reserved_memory_opt orelse 0;
 
         allocation[allocation.len - 2] = '/';
@@ -177,6 +177,10 @@ pub const AbsolutePath = struct {
                 return error.InsuffientMemoryAllocated;
             }
             const root_len = length(index);
+
+            const root_slice = storage.memory_space[index + path_index .. index + path_index + root_len];
+            std.debug.assert(root_slice[root_slice.len - 1] == '/');
+
             const absolute_path_len: usize = root_len + sub_path.len + 1;
             const base_slice = storage.memory_space[index + path_index .. index + path_index + absolute_path_len];
 
@@ -185,7 +189,12 @@ pub const AbsolutePath = struct {
             std.mem.copy(u8, dest_slice, sub_path);
             base_slice[base_slice.len - 1] = 0;
 
-            return base_slice[0.. :0];
+            std.debug.assert(base_slice.len > 1);
+            std.debug.assert(base_slice[base_slice.len - 1] == 0);
+
+            const terminated_path: [:0]const u8 = base_slice[0 .. base_slice.len - 1 :0];
+
+            return terminated_path;
         }
 
         // pub inline fn absolutePathBuffer(self: @This(), sub_path: []const u8, output_buffer: []u8) ![]const u8 {

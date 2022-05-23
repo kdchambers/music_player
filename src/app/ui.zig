@@ -281,8 +281,15 @@ pub const track_view = struct {
                 .height = 30 * scale_factor.vertical,
             };
 
+            const play_track_action = event_system.SubsystemActionIndex{
+                .subsystem = audio.subsystem_index,
+                .index = audio.mp3.doPlayAudio(track_entry.path_index),
+            };
+
+            const null_action = event_system.SubsystemActionIndex.null_value;
             var action_config = gui.button.ActionConfig{
                 .on_hover_color_opt = @intCast(u8, gui.color_list.append(theme.track_background_hovered)),
+                .on_click_left_action_list = [4]event_system.SubsystemActionIndex{ play_track_action, null_action, null_action, null_action },
             };
 
             // const track_item_quad_index = face_writer.*.used;

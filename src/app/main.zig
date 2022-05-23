@@ -366,11 +366,11 @@ pub fn main() !void {
 
     navigation.subsystem_index = event_system.registerActionHandler(&navigation.doAction);
 
-    subsystems.audio = event_system.registerActionHandler(&audio.doAction);
+    audio.subsystem_index = event_system.registerActionHandler(&audio.doAction);
     subsystems.gui = event_system.registerActionHandler(&gui.doAction);
 
     std.debug.assert(navigation.subsystem_index == 0);
-    std.debug.assert(subsystems.audio == 1);
+    std.debug.assert(audio.subsystem_index == 1);
     std.debug.assert(subsystems.gui == 2);
 
     var allocator = gpa.allocator();
