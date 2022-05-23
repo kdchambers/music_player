@@ -248,7 +248,13 @@ pub const footer = struct {
 pub const track_view = struct {
     pub fn draw(
         face_writer: *QuadFaceWriter(GenericVertex),
-        track_title_list: []const []const u8,
+        // NOTE: model_interface interface
+        // entries() Entry
+        //     title() []const u8
+        //     artist() []const u8
+        //     duration() []const u8
+        //     path_index: SubPath.Index
+        model_interface: anytype,
         glyph_set: GlyphSet,
         scale_factor: ScreenScaleFactor,
         theme: Theme,
@@ -256,8 +262,14 @@ pub const track_view = struct {
         // const track_item_background_color_index = action.color_list.append(theme.track_background);
         // const track_item_on_hover_color_index = action.color_list.append(theme.track_background_hovered);
 
-        for (track_title_list) |track_title, track_index| {
-            const track_name = track_title; // track_metadata.title[0..track_metadata.title_length];
+        // TODO: Remove sanity checks when more stable
+        std.debug.assert(model_interface.entries().len < 20);
+        for (model_interface.entries()) |track_entry, track_index| {
+            const track_name = track_entry.title(); // track_metadata.title[0..track_metadata.title_length];
+
+            std.log.info("Track name: {s}", .{track_name});
+
+            std.debug.assert(track_name.len < 40);
 
             std.debug.assert(track_name.len > 0);
             std.log.info("Track name: '{s}'", .{track_name});

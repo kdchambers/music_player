@@ -65,9 +65,21 @@ pub const String = struct {
         std.debug.assert(data.len > string.len);
 
         @ptrCast(*u16, @alignCast(2, data.ptr)).* = @intCast(u16, string.len);
-        std.mem.copy(u8, data[2 .. data.len - 1], string);
+        var dest_slice = data[string_index .. string_index + string.len];
+
+        std.debug.assert(dest_slice.len == string.len);
+        std.debug.assert((dest_slice.len + 3) == data.len);
+
+        std.mem.copy(u8, dest_slice, string);
+
         data[data.len - 1] = 0;
-        return arena.indexFor(@ptrCast(*const u8, data.ptr));
+        const result_index = arena.indexFor(@ptrCast(*const u8, data.ptr));
+
+        // Sanity check
+        std.debug.assert(String.length(result_index) == string.len);
+        std.debug.assert(std.mem.eql(u8, String.value(result_index), string));
+
+        return result_index;
     }
 
     pub inline fn calculateSpaceRequired(string_len: usize) u16 {

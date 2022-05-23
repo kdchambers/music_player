@@ -53,19 +53,40 @@ pub fn assertIndexAlignment(index: u16, comptime alignment: u29) void {
 }
 
 pub const TrackViewModel = struct {
-
     const TrackViewModelEntry = struct {
-        title: String.Index,
-        artist: String.Index,
-        path: SubPath.Index,
+        title_index: String.Index,
+        artist_index: String.Index,
+        path_index: SubPath.Index,
         duration_seconds: u16,
+
+        pub fn title(self: @This()) []const u8 {
+            std.debug.assert(self.title_index != String.null_index);
+            return String.value(self.title_index);
+        }
+
+        pub fn artist(self: @This()) []const u8 {
+            std.debug.assert(self.artist_index != String.null_index);
+            return String.value(self.artist_index);
+        }
+
+        // pub fn duration(self: @This()) []const u8 {
+        //     _ = self;
+        //     // TODO: Implemnent
+        //     return "00:00";
+        // }
+
+        pub fn absolutePathZ(self: @This()) ![:0]const u8 {
+            return try SubPath.interface.absolutePathZ(self.path_index);
+        }
     };
 
     track_entry_count: u16,
     parent_path: AbsolutePath.Index,
     track_list_index: u16,
 
-    // track_list: []TrackViewModelEntry,
+    pub fn entries(self: @This()) []const TrackViewModelEntry {
+        return @ptrCast([*]const TrackViewModelEntry, @alignCast(2, &storage.memory_space[self.track_list_index]))[0..self.track_entry_count];
+    }
 
     pub fn getTrackFilename(self: @This(), index: u8) []const u8 {
         std.debug.assert(index < self.entry_count);
@@ -75,7 +96,7 @@ pub const TrackViewModel = struct {
 
     pub fn getTitle(self: @This(), index: u8) []const u8 {
         const track_list = @ptrCast([*]const TrackViewModelEntry, @alignCast(2, &storage.memory_space[self.track_list_index]));
-        return String.value(track_list[index].title);
+        return String.value(track_list[index].title_index);
     }
 
     pub fn parseExtension(file_name: []const u8) ![]const u8 {
@@ -106,21 +127,21 @@ pub const TrackViewModel = struct {
     pub fn log(self: @This()) void {
         std.log.info("Parent path: \"{s}\"", .{AbsolutePath.interface.path(self.parent_path)});
         std.log.info("Tracks: {d}", .{self.track_entry_count});
-        var track_index: u32 = 0;
+        var track_i: u32 = 0;
         var track_list = @ptrCast([*]const TrackViewModelEntry, @alignCast(2, &storage.memory_space[self.track_list_index]));
 
-        while (track_index < self.track_entry_count) : (track_index += 1) {
-            const track = track_list[track_index];
+        while (track_i < self.track_entry_count) : (track_i += 1) {
+            const track = track_list[track_i];
             const null_string = "null";
 
             {
-                const file_path_value = if (track.path == String.null_index) null_string else SubPath.interface.path(track.path);
+                const file_path_value = if (track.path_index == String.null_index) null_string else SubPath.interface.path(track.path_index);
                 std.log.info("  File Path: \"{s}\"", .{file_path_value});
             }
 
             {
-                const title_value = if (track.title == String.null_index) null_string else String.value(track.title);
-                std.log.info("  Title #{d}: \"{s}\"", .{ track_index + 1, title_value });
+                const title_value = if (track.title_index == String.null_index) null_string else String.value(track.title_index);
+                std.log.info("  Title #{d}: \"{s}\"", .{ track_i + 1, title_value });
             }
         }
     }
@@ -155,8 +176,8 @@ pub const TrackViewModel = struct {
             if (entry.kind == .File) {
                 const extension = parseExtension(entry.name) catch "";
                 if (matchExtension("MP3", extension) or matchExtension("FLAC", extension)) {
-                    track_entries[head.track_entry_count].path = try SubPath.write(arena, entry.name, head.parent_path);
-                    assertIndexAlignment(track_entries[head.track_entry_count].path, 2);
+                    track_entries[head.track_entry_count].path_index = try SubPath.write(arena, entry.name, head.parent_path);
+                    assertIndexAlignment(track_entries[head.track_entry_count].path_index, 2);
 
                     var file = directory.openFile(entry.name, .{}) catch |err| {
                         std.log.err("Failed to open file '{s}' with err {s}", .{ entry.name, err });
@@ -169,8 +190,8 @@ pub const TrackViewModel = struct {
                         .load_title = true,
                     }).loadMetaFromFile(arena, file));
 
-                    track_entries[head.track_entry_count].title = meta_values.title;
-                    track_entries[head.track_entry_count].artist = meta_values.artist;
+                    track_entries[head.track_entry_count].title_index = meta_values.title;
+                    track_entries[head.track_entry_count].artist_index = meta_values.artist;
 
                     head.track_entry_count += 1;
                 }
@@ -474,7 +495,7 @@ pub fn main() !void {
 
                     const max_family_queues: u32 = 16;
                     if (queue_family_count > max_family_queues) {
-                       std.log.warn("Some family queues for selected device ignored", .{});
+                        std.log.warn("Some family queues for selected device ignored", .{});
                     }
 
                     var queue_families: [max_family_queues]vk.QueueFamilyProperties = undefined;
@@ -1758,19 +1779,9 @@ fn update(allocator: Allocator, app: *GraphicsContext) !void {
 
         if (navigation.playlist_path_opt) |playlist_path| {
             const track_view_model = try TrackViewModel.create(&main_arena, playlist_path, 0, 20);
-            track_view_model.log();
-
-            var track_title_list: [64][]const u8 = undefined;
-            var track_index: u32 = 0;
-
-            const track_count: u32 = track_view_model.track_entry_count;
-            while (track_index < track_count) : (track_index += 1) {
-                track_title_list[track_index] = track_view_model.getTitle(@intCast(u8, track_index));
-            }
-
             try ui.track_view.draw(
                 &face_writer,
-                track_title_list[0..track_count],
+                track_view_model,
                 glyph_set,
                 scale_factor,
                 theme,
