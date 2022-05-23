@@ -27,11 +27,6 @@ pub fn build(b: *Builder) void {
     exe.addIncludeDir("/usr/include/");
     exe.addIncludeDir("/usr/local/include");
 
-    const storage_pkg = std.build.Pkg{
-        .name = "storage",
-        .path = .{ .path = lib_src_path ++ "storage.zig" },
-    };
-
     const geometry_pkg = std.build.Pkg{
         .name = "geometry",
         .path = .{ .path = lib_src_path ++ "geometry.zig" },
@@ -45,6 +40,12 @@ pub fn build(b: *Builder) void {
     const memory_pkg = std.build.Pkg{
         .name = "memory",
         .path = .{ .path = lib_src_path ++ "memory.zig" },
+    };
+
+    const storage_pkg = std.build.Pkg{
+        .name = "storage",
+        .path = .{ .path = lib_src_path ++ "storage.zig" },
+        .dependencies = &[_]Pkg{memory_pkg},
     };
 
     const library_navigator_pkg = std.build.Pkg{
@@ -109,7 +110,12 @@ pub fn build(b: *Builder) void {
         .path = .{
             .path = lib_src_path ++ "audio.zig",
         },
-        .dependencies = &[_]Pkg{ message_queue_pkg, memory_pkg, event_system_pkg },
+        .dependencies = &[_]Pkg{
+            message_queue_pkg,
+            memory_pkg,
+            event_system_pkg,
+            storage_pkg,
+        },
     };
 
     const gen = vkgen.VkGenerateStep.init(b, "deps/vk.xml", "vk.zig");
@@ -215,7 +221,7 @@ pub fn build(b: *Builder) void {
     exe.addPackage(ui_pkg);
     exe.addPackage(action_pkg);
     exe.addPackage(library_navigator_pkg);
-    
+
     exe.linkLibC();
 
     exe.linkSystemLibrary("ao");

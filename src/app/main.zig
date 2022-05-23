@@ -41,6 +41,9 @@ const theme = @import("Theme.zig").default;
 const LibraryNavigator = @import("LibraryNavigator.zig");
 const navigation = @import("navigation.zig").navigation;
 const storage = @import("storage");
+const SubPath = storage.SubPath;
+const AbsolutePath = storage.AbsolutePath;
+const String = storage.String;
 
 const subsystems = struct {
     const null_value = std.math.maxInt(event_system.SubsystemIndex);
@@ -50,196 +53,34 @@ const subsystems = struct {
     var gui: event_system.SubsystemIndex = null_value;
 };
 
-pub const String = struct {
-    DataType: type = [*]align(2) u8,
-
-    // FORMAT:
-    //
-    // [0] length
-    // [1..N-1] string
-    // [N] null terminator
-
-    // data: [*]align(2) u8,
-
-    pub inline fn write(arena: *memory.LinearArena, string: []const u8) !storage.Pointer(@This().interface) {
-        std.debug.assert(string.len < std.math.maxInt(u8));
-        var data = arena.allocateAligned(u8, 2, @intCast(u16, string.len + 2));
-        data[0] = @intCast(u8, string.len);
-        std.mem.copy(u8, data[1..], string);
-        data[data.len - 1] = 0;
-        const ReturnType: type = storage.Pointer(@This().interface);
-
-        // TODO: Seems to be a required hack. Remove when compiler is fixed
-        var return_value: ReturnType = undefined;
-        return_value.address = arena.indexFor(&data[0]);
-        return return_value;
-        // return ReturnType{
-        // .address = arena.indexFor(&data[0]),
-        // };
-    }
-
-    pub inline fn calculateSpaceRequired(string_len: usize) u16 {
-        return @intCast(u16, string_len) + 2;
-    }
-
-    const interface = struct {
-        Type: type = [*]align(2) const u8,
-        addr: [*]align(2) const u8,
-
-        pub inline fn length(self: @This()) u16 {
-            return @ptrCast(*u16, &self.addr[0]).*;
-        }
-
-        pub inline fn value(self: @This()) []const u8 {
-            const len = self.length();
-            return self.addr[2 .. 2 + len];
-        }
-    };
-};
-
-pub const AbsolutePath = struct {
-    const length_index: u32 = 0;
-    const writable_memory_size_index: u32 = 2;
-    const path_index: u32 = 4;
-
-    Type: type = [*]align(2) u8,
-
-    // data: [*]align(2) u8,
-
-    pub fn write(
-        arena: *memory.LinearArena,
-        path_string: []const u8,
-        reserved_memory_opt: ?u16,
-    ) !storage.Pointer(@This().interface) {
-        var data = arena.allocateAligned(u8, 2, @intCast(u16, path_string.len + 5));
-        @ptrCast(*u16, @alignCast(2, &data[length_index])).* = @intCast(u16, path_string.len);
-        @ptrCast(*u16, @alignCast(2, &data[writable_memory_size_index])).* = reserved_memory_opt orelse 0;
-
-        std.mem.copy(u8, data[path_index..], path_string);
-        data[data.len - 1] = 0;
-
-        if (reserved_memory_opt) |reserved_memory| {
-            _ = arena.allocate(u8, reserved_memory);
-        }
-
-        // TODO: Seems to be a required hack. Remove when compiler is fixed
-        const ReturnType: type = storage.Pointer(@This().interface);
-        var return_value: ReturnType = undefined;
-        return_value.address = arena.indexFor(&data[0]);
-        return return_value;
-
-        // return storage.Pointer(@This().interface){
-        // .address = arena.indexFor(&data[0]),
-        // };
-    }
-
-    const interface = struct {
-        Type: type = [*]align(2) u8,
-        addr: [*]align(2) u8,
-
-        pub inline fn writableSpaceSize(self: @This()) u16 {
-            return @ptrCast(*u16, &self.data[writable_memory_size_index]).*;
-        }
-
-        pub inline fn absolutePath(self: @This(), sub_path: []const u8) ![]const u8 {
-            const writable_space = self.writableSpaceSize();
-            if ((sub_path.len + 1) > writable_space) {
-                return error.InsuffientMemoryAllocated;
-            }
-            const len = self.length();
-            const start_index = path_index + len + 1;
-            self.data[start_index - 1] = '/';
-            var dest_slice = self.data[start_index .. start_index + sub_path.len];
-            std.debug.assert(dest_slice.len == sub_path.len);
-            std.mem.copy(u8, dest_slice, sub_path);
-            return self.data[path_index .. start_index + sub_path.len];
-        }
-
-        // pub inline fn absolutePathBuffer(self: @This(), sub_path: []const u8, output_buffer: []u8) ![]const u8 {
-        // //
-        // }
-
-        pub inline fn length(self: @This()) u16 {
-            return @ptrCast(*u16, &self.addr[length_index]).*;
-        }
-
-        pub inline fn path(self: @This()) []const u8 {
-            const len = self.length();
-            return self.addr[path_index .. path_index + len];
-        }
-    };
-};
-
-pub const SubPath = struct {
-    const parent_path_index_index: u32 = 0;
-    const length_index: u32 = 2;
-    const path_index: u32 = 4;
-
-    pub fn write(
-        arena: *memory.LinearArena,
-        sub_path: []const u8,
-        parent_path: storage.Pointer(AbsolutePath.interface),
-    ) !storage.Pointer(SubPath.interface) {
-        var allocated_memory = arena.allocateAligned(u8, 2, @intCast(u16, sub_path.len + 4));
-        const result_pointer = arena.indexFor(@ptrCast(*u8, allocated_memory.ptr));
-        @ptrCast(
-            *storage.Pointer(AbsolutePath.interface),
-            @alignCast(2, &allocated_memory[parent_path_index_index]),
-        ).* = parent_path;
-        @ptrCast(*u16, @alignCast(2, &allocated_memory[length_index])).* = @intCast(u16, sub_path.len);
-        std.mem.copy(u8, allocated_memory[path_index..], sub_path);
-
-        // TODO: Seems to be a required hack. Remove when compiler is fixed
-        const ReturnType: type = storage.Pointer(@This().interface);
-        var return_value: ReturnType = undefined;
-        return_value.address = result_pointer;
-        return return_value;
-
-        // return storage.Pointer(SubPath.interface){
-        // .address = result_pointer,
-        // };
-    }
-
-    pub const interface = struct {
-        Type: type = [*]align(2) u8,
-        addr: [*]align(2) u8,
-
-        pub inline fn length(self: @This()) u16 {
-            return @ptrCast(*u16, &self.addr[length_index]).*;
-        }
-
-        pub inline fn path(self: @This()) []const u8 {
-            const len = self.length();
-            return self.addr[path_index .. path_index + len];
-        }
-
-        pub inline fn absolutePath(self: @This()) ![]const u8 {
-            const parent_path = @ptrCast(*storage.Pointer(AbsolutePath.interface), &self.addr[parent_path_index_index]).*;
-            return try parent_path.absolutePath(self.path());
-        }
-    };
-};
+pub fn assertIndexAlignment(index: u16, comptime alignment: u29) void {
+    std.debug.assert(@ptrToInt(&storage.memory_space[index]) % alignment == 0);
+}
 
 pub const TrackViewModel = struct {
-    const TrackViewModelEntry = struct {
-        title: storage.Pointer(String.interface),
-        artist: storage.Pointer(String.interface),
-        path: storage.Pointer(SubPath.interface),
-    };
 
-    pub const interface = struct {
-        Type: type = [*]align(2) u8,
-        addr: @This().Type,
+    const TrackViewModelEntry = struct {
+        title: String.Index,
+        artist: String.Index,
+        path: SubPath.Index,
+        duration_seconds: u16,
     };
 
     track_entry_count: u16,
-    parent_path: storage.Pointer(AbsolutePath.interface),
+    parent_path: AbsolutePath.Index,
+    track_list_index: u16,
+
     // track_list: []TrackViewModelEntry,
 
     pub fn getTrackFilename(self: @This(), index: u8) []const u8 {
         std.debug.assert(index < self.entry_count);
         const entry_list = @intToPtr([*]TrackViewModelEntry, @ptrToInt(&self) + @sizeOf(@This()))[0..self.entry_count];
         return entry_list[index].path();
+    }
+
+    pub fn getTitle(self: @This(), index: u8) []const u8 {
+        const track_list = @ptrCast([*]const TrackViewModelEntry, @alignCast(2, &storage.memory_space[self.track_list_index]));
+        return String.value(track_list[index].title);
     }
 
     pub fn parseExtension(file_name: []const u8) ![]const u8 {
@@ -268,9 +109,25 @@ pub const TrackViewModel = struct {
     }
 
     pub fn log(self: @This()) void {
-        const parent_path_interface = self.parent_path.get();
-        std.log.info("Parent path: {s}", .{parent_path_interface.path()});
+        std.log.info("Parent path: \"{s}\"", .{AbsolutePath.interface.path(self.parent_path)});
         std.log.info("Tracks: {d}", .{self.track_entry_count});
+        var track_index: u32 = 0;
+        var track_list = @ptrCast([*]const TrackViewModelEntry, @alignCast(2, &storage.memory_space[self.track_list_index]));
+
+        while (track_index < self.track_entry_count) : (track_index += 1) {
+            const track = track_list[track_index];
+            const null_string = "null";
+
+            {
+                const file_path_value = if (track.path == String.null_index) null_string else SubPath.interface.path(track.path);
+                std.log.info("  File Path: \"{s}\"", .{file_path_value});
+            }
+
+            {
+                const title_value = if (track.title == String.null_index) null_string else String.value(track.title);
+                std.log.info("  Title #{d}: \"{s}\"", .{ track_index + 1, title_value });
+            }
+        }
     }
 
     pub fn create(
@@ -289,6 +146,11 @@ pub const TrackViewModel = struct {
         head.parent_path = try AbsolutePath.write(arena, source_parent_path, 256);
 
         var track_entries = arena.allocate(TrackViewModelEntry, max_entries);
+        head.track_list_index = arena.indexFor(@ptrCast(*u8, track_entries.ptr));
+
+        // Assert track_entries has alignment of 2
+        std.debug.assert(@ptrToInt(track_entries.ptr) % 2 == 0);
+
         var iterator = directory.iterate();
         while (try iterator.next()) |entry| {
             if (head.track_entry_count >= max_entries) {
@@ -299,14 +161,27 @@ pub const TrackViewModel = struct {
                 const extension = parseExtension(entry.name) catch "";
                 if (matchExtension("MP3", extension) or matchExtension("FLAC", extension)) {
                     track_entries[head.track_entry_count].path = try SubPath.write(arena, entry.name, head.parent_path);
-                    track_entries[head.track_entry_count].title = .{ .address = storage.nullptr };
-                    track_entries[head.track_entry_count].artist = .{ .address = storage.nullptr };
+                    assertIndexAlignment(track_entries[head.track_entry_count].path, 2);
+
+                    var file = directory.openFile(entry.name, .{}) catch |err| {
+                        std.log.err("Failed to open file '{s}' with err {s}", .{ entry.name, err });
+                        return err;
+                    };
+                    defer file.close();
+
+                    const meta_values = try (audio.mp3.loadMetaFromFileFunction(.{
+                        .load_artist = true,
+                        .load_title = true,
+                    }).loadMetaFromFile(arena, file));
+
+                    track_entries[head.track_entry_count].title = meta_values.title;
+                    track_entries[head.track_entry_count].artist = meta_values.artist;
+
                     head.track_entry_count += 1;
                 }
             }
         }
 
-        // TODO: Assert no gap between head and entries
         return head;
     }
 };
@@ -489,6 +364,7 @@ pub fn main() !void {
         var page_allocator = std.heap.page_allocator;
         var main_arena_memory = try page_allocator.alloc(u8, bytes_per_kib * 64);
         main_arena.init(main_arena_memory);
+        storage.init(main_arena.access()[0..]);
     }
 
     event_system.mouse_event_writer.init(&main_arena, 1024);
@@ -1886,23 +1762,20 @@ fn update(allocator: Allocator, app: *GraphicsContext) !void {
         );
 
         if (navigation.playlist_path_opt) |playlist_path| {
-            // TODO: 'unable to evulate constant expression error'. Possible compiler bug
-            // {
-            // const track_meta_checkpoint = main_arena.checkpoint();
-            // const track_view_model = try TrackViewModel.create(&main_arena, playlist_path, 0, 20);
-            // track_view_model.log();
-            // main_arena.rewindTo(track_meta_checkpoint);
-            // }
+            const track_view_model = try TrackViewModel.create(&main_arena, playlist_path, 0, 20);
+            track_view_model.log();
 
-            const track_metadata_list = try audio.mp3.loadMetaFromDirectory(&main_arena, playlist_path);
-            var track_slice_list: [64][]const u8 = undefined;
-            for (track_metadata_list) |track_metadata, index| {
-                const length: u8 = main_arena.memory[track_metadata.title + 1];
-                track_slice_list[index] = main_arena.memory[track_metadata.title + 2 .. track_metadata.title + 2 + length];
+            var track_title_list: [64][]const u8 = undefined;
+            var track_index: u32 = 0;
+
+            const track_count: u32 = track_view_model.track_entry_count;
+            while (track_index < track_count) : (track_index += 1) {
+                track_title_list[track_index] = track_view_model.getTitle(@intCast(u8, track_index));
             }
+
             try ui.track_view.draw(
                 &face_writer,
-                track_slice_list[0..track_metadata_list.len],
+                track_title_list[0..track_count],
                 glyph_set,
                 scale_factor,
                 theme,

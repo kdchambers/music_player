@@ -23,7 +23,9 @@ pub const LinearArena = struct {
     used: u16 = 0,
     memory: []u8 = undefined,
 
-    pub inline fn indexFor(self: @This(), value: *u8) u16 {
+    pub inline fn indexFor(self: @This(), value: *const u8) u16 {
+        std.debug.assert(@ptrToInt(self.memory.ptr) <= @ptrToInt(value));
+        std.debug.assert(@ptrToInt(self.memory.ptr) + std.math.maxInt(u16) > @ptrToInt(value));
         return @intCast(u16, @ptrToInt(value) - @ptrToInt(self.memory.ptr));
     }
 

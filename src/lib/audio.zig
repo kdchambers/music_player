@@ -10,6 +10,8 @@ const Allocator = std.mem.Allocator;
 const memory = @import("memory");
 const id3 = @import("id3.zig");
 const event_system = @import("event_system");
+const storage = @import("storage");
+const String = storage.String;
 
 const FixedAtomicEventQueue = @import("message_queue").FixedAtomicEventQueue;
 
@@ -38,8 +40,17 @@ pub const TrackMetadata = struct {
 };
 
 pub fn doAction(action_index: event_system.ActionIndex) void {
-    _ = action_index;
-    std.debug.assert(false);
+    if (input_event_buffer.buffer[action_index] == .play_requested) {
+        const path_index = loaded_tracks.items[action_index];
+        const absolute_path = storage.SubPath.interface.absolutePathZ(path_index) catch |err| {
+            std.log.err("Failed to create path to audio file: {s}", .{err});
+            return;
+        };
+        mp3.playFile(std.heap.c_allocator, absolute_path) catch |err| {
+            std.log.err("Failed to play audio file: {s} -> {s}", .{ absolute_path, err });
+            return;
+        };
+    }
 }
 
 const toSlice = memory.sliceFromNullTerminatedString;
@@ -181,6 +192,7 @@ pub const AudioEvent = enum(u8) {
 
 pub const InputEvent = enum(u8) {
     deinitialization_requested,
+    play_requested,
     stop_requested,
     pause_requested,
     audio_source_changed,
@@ -188,6 +200,7 @@ pub const InputEvent = enum(u8) {
 
 pub var input_event_buffer: FixedAtomicEventQueue(InputEvent, 10) = .{};
 pub var output_event_buffer: FixedAtomicEventQueue(AudioEvent, 10) = .{};
+var loaded_tracks: memory.FixedBuffer(storage.SubPath.Index, 20) = .{};
 
 pub var current_track: TrackMetadata = undefined;
 
@@ -285,6 +298,193 @@ fn add(arena: *memory.LinearArena, text: []const u8, tag_type: TagType) u16 {
 }
 
 pub const mp3 = struct {
+    pub fn doPlayAudio(path: storage.SubPath.Index) event_system.ActionIndex {
+        // TODO:
+        _ = loaded_tracks.append(path);
+        return input_event_buffer.add(.play_requested);
+    }
+
+    const LoadMetaFromFileFunctionConfig = struct {
+        load_artist: bool = false,
+        load_title: bool = false,
+        load_genre: bool = false,
+        load_album: bool = false,
+    };
+
+    pub fn loadMetaFromFileFunction(config: LoadMetaFromFileFunctionConfig) type {
+        return struct {
+            const IndexType = u16;
+            const null_index = std.math.maxInt(u16);
+
+            const Indices = struct {
+                artist: if (config.load_artist) IndexType else void,
+                title: if (config.load_title) IndexType else void,
+                genre: if (config.load_genre) IndexType else void,
+                album: if (config.load_album) IndexType else void,
+            };
+
+            pub fn loadMetaFromFile(arena: *memory.LinearArena, file: std.fs.File) !Indices {
+                var indices: Indices = undefined;
+
+                comptime var items_to_parse: comptime_int = 0;
+                var items_parsed_count: u32 = 0;
+
+                if (comptime config.load_artist) {
+                    indices.artist = null_index;
+                    items_to_parse += 1;
+                }
+
+                if (config.load_title) {
+                    indices.title = null_index;
+                    items_to_parse += 1;
+                }
+
+                if (config.load_genre) {
+                    indices.genre = null_index;
+                    items_to_parse += 1;
+                }
+
+                if (config.load_album) {
+                    indices.album = null_index;
+                    items_to_parse += 1;
+                }
+
+                var header: id3.Header = undefined;
+                {
+                    var header_buffer: []u8 = (@ptrCast([*]u8, &header)[0..@sizeOf(id3.Header)]);
+                    var bytes_read: u64 = try file.read(header_buffer);
+
+                    if (bytes_read < @sizeOf(id3.Header)) {
+                        std.log.err("Failed to read id3 header. Skipping", .{});
+                        return error.InvalidHeader;
+                    }
+                }
+
+                header.decodeSize();
+
+                if (header.identifier[0] != 'I' or header.identifier[1] != 'D' or header.identifier[2] != '3') {
+                    std.log.err("ID3 header is invalid", .{});
+                    return error.InvalidHeader;
+                }
+
+                std.debug.print("Version {d}.{d}\n", .{ header.version_major, header.version_revision });
+                std.debug.print("Flags {d}\n", .{header.flags});
+
+                // TODO: Implement
+                std.debug.assert(header.flags == 0);
+
+                std.debug.print("Size {d}\n", .{header.size});
+
+                const max_frame_size: u32 = 256;
+                var frame_input_buffer: [max_frame_size]u8 = undefined;
+
+                var i: u32 = 0;
+                var frame: *id3.Frame = undefined;
+
+                var is_album_parsed: bool = false;
+                var is_title_parsed: bool = false;
+                var is_artist_parsed: bool = false;
+
+                const artist_tag = "TPE1";
+                const album_tag = "TALB";
+                const title_tag = "TIT2";
+
+                while (i <= header.size) {
+                    std.log.info("Index {d} Header {d}", .{ i, header.size });
+
+                    _ = try file.read(frame_input_buffer[0..@sizeOf(id3.Frame)]);
+                    frame = @ptrCast(*id3.Frame, &frame_input_buffer[0]);
+
+                    frame.size = std.mem.bigToNative(u32, frame.size);
+                    if (header.version_major == '4') {
+                        frame.size = id3.synchsafeToU32(frame.size);
+                    }
+
+                    std.log.info("Frame {d} {s}", .{ frame.size, frame.id[0..] });
+
+                    if (frame.id[0] == 0) {
+                        // Into post tag padding
+                        break;
+                    }
+
+                    if (frame.size > header.size) {
+                        std.log.err("Frame {d} is larger than entire header {d}", .{ frame.size, header.size });
+                        return error.InvalidMp3Header;
+                    }
+
+                    // const tag_list = [4]const u8 { artist_tag, album_tag, title_tag, duration_tag };
+
+                    if (comptime config.load_artist) {
+                        if (!is_artist_parsed and std.mem.eql(u8, frame.id[0..], artist_tag)) {
+                            is_artist_parsed = true;
+                            items_parsed_count += 1;
+                            var artist_value = frame_input_buffer[@sizeOf(id3.Frame) .. @sizeOf(id3.Frame) + frame.size];
+                            _ = try file.read(artist_value);
+
+                            const encoding = @intToEnum(id3.TextEncoding, artist_value[0]);
+                            std.log.info("Adding artist '{s}'", .{artist_value});
+
+                            if (encoding != .iso_8859_1) {
+                                std.log.warn("Unsupported text encoding: {s}", .{encoding});
+                            }
+
+                            indices.artist = try String.write(arena, artist_value[1..]);
+                            // indices.artist = add(arena, artist_value[1..], .artist);
+                        }
+                    }
+
+                    if (comptime config.load_album) {
+                        if (!is_album_parsed and std.mem.eql(u8, frame.id[0..], album_tag)) {
+                            is_album_parsed = true;
+                            items_parsed_count += 1;
+                            var album_value = frame_input_buffer[@sizeOf(id3.Frame) .. @sizeOf(id3.Frame) + frame.size];
+
+                            _ = try file.read(album_value);
+
+                            const encoding = @intToEnum(id3.TextEncoding, album_value[0]);
+                            if (encoding != .iso_8859_1) {
+                                std.log.warn("Unsupported text encoding: {s}", .{encoding});
+                            }
+
+                            std.log.info("Adding album '{s}'", .{album_value[1..]});
+                            indices.album = try String.write(arena, album_value[1..]);
+                            // indices.album = add(arena, album_value[1..], .album);
+                        }
+                    }
+
+                    if (comptime config.load_title) {
+                        std.log.info("Attempt to parse title: {s}", .{frame.id[0..]});
+                        if (!is_title_parsed and std.mem.eql(u8, frame.id[0..], title_tag)) {
+                            is_title_parsed = true;
+                            items_parsed_count += 1;
+                            var title_value = frame_input_buffer[@sizeOf(id3.Frame) .. @sizeOf(id3.Frame) + frame.size];
+                            _ = try file.read(title_value);
+
+                            const encoding = @intToEnum(id3.TextEncoding, title_value[0]);
+                            if (encoding != .iso_8859_1) {
+                                std.log.warn("Unsupported text encoding: {s}", .{encoding});
+                            }
+
+                            std.log.info("TITLE: {s}", .{title_value[1..]});
+
+                            indices.title = try String.write(arena, title_value[1..]);
+                            // indices.title = add(arena, title_value[1..], .title);
+                        }
+                    }
+
+                    if (items_parsed_count >= items_to_parse) {
+                        break;
+                    }
+
+                    i += (frame.size + @sizeOf(id3.Frame));
+                    try file.seekTo(@sizeOf(id3.Header) + i);
+                }
+
+                return indices;
+            }
+        };
+    }
+
     pub fn loadMetaFromDirectory(arena: *memory.LinearArena, directory: std.fs.Dir) ![]TrackMetadataIndices {
         var file_count: u16 = 0;
         var files_buffer: [64]std.fs.File = undefined;
