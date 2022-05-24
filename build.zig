@@ -163,6 +163,7 @@ pub fn build(b: *Builder) void {
             text_pkg,
             action_pkg,
             event_system_pkg,
+            memory_pkg,
         },
     };
 

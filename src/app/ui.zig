@@ -25,6 +25,8 @@ const ScreenScaleFactor = graphics.ScreenScaleFactor(.{ .NDCRightType = ScreenNo
 
 const ui = @This();
 
+pub var subsystem_index: event_system.SubsystemIndex = undefined;
+
 pub const Widget = struct {
     face_index: u16,
     face_count: u16,
@@ -40,7 +42,25 @@ pub const ActionChangeColor = struct {
 const Action = enum(u8) {
     none = 0,
     set_color,
+    progress_bar_start,
+    progress_bar_stop,
 };
+
+var action_list: memory.FixedBuffer(Action, 20) = .{};
+
+pub fn doStartProgressBar() event_system.ActionIndex {
+    return @intCast(event_system.ActionIndex, action_list.append(.progress_bar_start));
+}
+
+pub fn doAction(index: event_system.ActionIndex) void {
+    std.log.info("ui.doAction called", .{});
+    const act = action_list.items[index];
+    switch (act) {
+        .progress_bar_start => progress_bar.start(),
+        .progress_bar_stop => progress_bar.stop(),
+        else => unreachable,
+    }
+}
 
 var arena: memory.LinearArena = undefined;
 
@@ -579,13 +599,14 @@ pub const header = struct {
 };
 
 pub const progress_bar = struct {
-    var progress_bar_face_quad_opt: ?*geometry.QuadFace(GenericVertex) = null;
+    var progress_bar_face_quad_opt: ?*graphics.QuadFace(GenericVertex) = null;
 
     // TODO: Make global
     var stored_scale_factor: ?ScreenScaleFactor = null;
     // var stored_background_color: graphics.RGBA(f32) = undefined;
     // TODO: You have access to the existing color
     var stored_forground_color: graphics.RGBA(f32) = undefined;
+    var stored_update_event_id: u16 = 0;
 
     const Config = struct {
         progress_bar_update_interval_milliseconds: u32 = 200,
@@ -596,8 +617,19 @@ pub const progress_bar = struct {
     pub fn update() void {
         if (progress_bar_face_quad_opt) |progress_bar_face_quad| {
             const progress = audio.output.progress() catch 0.0;
-            foreground.draw(progress_bar_face_quad, progress, stored_scale_factor, stored_forground_color);
+            std.log.info("Progress bar update: {d}", .{progress});
+            foreground.draw(progress_bar_face_quad, progress, stored_scale_factor.?, stored_forground_color);
+        } else {
+            std.log.warn("Cannot update progress bar: Hasn't been initially created", .{});
         }
+    }
+
+    pub fn start() void {
+        event_system.timeIntervalEventBegin(stored_update_event_id);
+    }
+
+    pub fn stop() void {
+        std.debug.assert(false);
     }
 
     pub fn create(
@@ -612,8 +644,11 @@ pub const progress_bar = struct {
         const progress = audio.output.progress() catch 0.0;
         background.draw(&faces[0], scale_factor, theme.progress_bar_background);
         foreground.draw(&faces[1], progress, scale_factor, theme.progress_bar_foreground);
-        // const callback_id = event_system.timeIntervalEventRegister(.{ .interval_milliseconds = config.progress_bar_update_interval_milliseconds, .callback = update });
-        // event_system.timeIntervalEventStart(callback_id);
+        progress_bar_face_quad_opt = &faces[1];
+        stored_update_event_id = event_system.timeIntervalEventRegister(.{
+            .interval_milliseconds = 300,
+            .callback = &update,
+        });
     }
 
     const background = struct {
@@ -649,12 +684,14 @@ pub const progress_bar = struct {
 
             const extent = geometry.Extent2D(ScreenNormalizedBaseType){
                 .x = -1.0 + margin + inner_margin_horizontal,
-                .y = 0.8 - inner_margin_vertical,
+                .y = 0.87 - inner_margin_vertical,
                 .width = width - (inner_margin_horizontal * 2.0),
                 .height = 4 * scale_factor.vertical,
             };
 
-            std.debug.assert(progress_percentage >= 0.0 and progress_percentage <= 1.0);
+            std.debug.assert(progress_percentage >= 0.0);
+            std.debug.assert(progress_percentage <= 1.0);
+
             const progress_extent = geometry.Extent2D(ScreenNormalizedBaseType){
                 .x = extent.x,
                 .y = extent.y,

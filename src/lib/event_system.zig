@@ -19,10 +19,94 @@ const ScreenPixelBaseType = constants.ScreenPixelBaseType;
 pub const ActionIndex = u12;
 pub const SubsystemIndex = u4;
 
+pub const InternalEventBinding = struct {
+    origin: SubsystemActionIndex,
+    target: SubsystemActionIndex,
+};
+
+pub fn resetBindings() void {
+    internal_event_bindings.clear();
+    registered_time_interval_events.clear();
+}
+
+var internal_event_bindings: memory.FixedBuffer(InternalEventBinding, 20) = .{};
+
+pub fn internalEventsBind(binding: InternalEventBinding) u16 {
+    return @intCast(u16, internal_event_bindings.append(binding));
+}
+
+pub fn internalEventHandle(origin: SubsystemActionIndex) void {
+    // std.debug.assert(false);
+    if (internal_event_bindings.count == 0) {
+        std.log.warn("No internal events loaded to invoke", .{});
+        return;
+    }
+    for (internal_event_bindings.toSlice()) |event| {
+        const current_origin = event.origin;
+        std.log.info("Matching Event: {d}", .{event.target.index});
+        if (current_origin.index == origin.index and current_origin.subsystem == origin.subsystem) {
+            std.log.info("Internal event matched", .{});
+            registered_action_handlers[event.target.subsystem].*(event.target.index);
+        }
+    }
+}
+
 pub const ActionHandlerFunction = fn (ActionIndex) void;
 
 pub const null_action_index: ActionIndex = std.math.maxInt(ActionIndex);
 pub const null_subsystem_index: SubsystemIndex = std.math.maxInt(SubsystemIndex);
+
+const TimeIntervalEventBinding = struct {
+    callback: *const fn () void,
+    start_timestamp_ms: i64,
+    last_called_timestamp_ms: i64,
+    interval_milliseconds: u32,
+    invocation_count: u32 = 0,
+};
+
+pub const TimeIntervalEventEntry = struct {
+    callback: *const fn () void,
+    interval_milliseconds: u32,
+};
+
+var registered_time_interval_events: memory.FixedBuffer(TimeIntervalEventBinding, 20) = .{};
+
+pub fn timeIntervalEventRegister(entry: TimeIntervalEventEntry) u16 {
+    return @intCast(u16, registered_time_interval_events.append(.{
+        .callback = entry.callback,
+        .start_timestamp_ms = 0,
+        .last_called_timestamp_ms = 0,
+        .interval_milliseconds = entry.interval_milliseconds,
+    }));
+}
+
+pub fn timeIntervalEventBegin(entry_id: u16) void {
+    var entry = &registered_time_interval_events.items[entry_id];
+    const current_timestamp_ms = std.time.milliTimestamp();
+    std.debug.assert(current_timestamp_ms >= 0);
+    entry.start_timestamp_ms = current_timestamp_ms;
+    entry.last_called_timestamp_ms = entry.start_timestamp_ms;
+
+    std.log.info("timeIntervalEvent started", .{});
+}
+
+pub fn handleTimeEvents(timestamp_ms: i64) void {
+    for (registered_time_interval_events.toSliceMutable()) |*event_entry| {
+        if (event_entry.start_timestamp_ms == 0) {
+            continue;
+        }
+        std.debug.assert(timestamp_ms >= event_entry.last_called_timestamp_ms);
+        const since_last_call = timestamp_ms - event_entry.last_called_timestamp_ms;
+        if (since_last_call >= event_entry.interval_milliseconds) {
+            std.log.info("Time interval event triggered", .{});
+            // Recalculate last_called_timestamp_ms to be a multiple of interval_milliseconds
+            // to avoid time drift
+            event_entry.invocation_count += 1;
+            event_entry.last_called_timestamp_ms = event_entry.start_timestamp_ms + (event_entry.interval_milliseconds * event_entry.invocation_count);
+            event_entry.callback.*();
+        }
+    }
+}
 
 pub const SubsystemActionRange = packed struct {
     subsystem: SubsystemIndex,

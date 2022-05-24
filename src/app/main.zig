@@ -88,6 +88,10 @@ pub const TrackViewModel = struct {
         return @ptrCast([*]const TrackViewModelEntry, @alignCast(2, &storage.memory_space[self.track_list_index]))[0..self.track_entry_count];
     }
 
+    pub fn entriesMut(self: @This()) []TrackViewModelEntry {
+        return @ptrCast([*]TrackViewModelEntry, @alignCast(2, &storage.memory_space[self.track_list_index]))[0..self.track_entry_count];
+    }
+
     pub fn getTrackFilename(self: @This(), index: u8) []const u8 {
         std.debug.assert(index < self.entry_count);
         const entry_list = @intToPtr([*]TrackViewModelEntry, @ptrToInt(&self) + @sizeOf(@This()))[0..self.entry_count];
@@ -368,6 +372,7 @@ pub fn main() !void {
 
     audio.subsystem_index = event_system.registerActionHandler(&audio.doAction);
     subsystems.gui = event_system.registerActionHandler(&gui.doAction);
+    ui.subsystem_index = event_system.registerActionHandler(&ui.doAction);
 
     std.debug.assert(navigation.subsystem_index == 0);
     std.debug.assert(audio.subsystem_index == 1);
@@ -907,6 +912,57 @@ fn setupApplication(allocator: Allocator, app: *GraphicsContext) !void {
     // var memory_properties = zvk.getDevicePhysicalMemoryProperties(app.physical_device);
     zvk.logDevicePhysicalMemoryProperties(memory_properties);
 
+    const mesh_memory_index: u32 = blk: {
+
+        // Find the best memory type for storing mesh + texture data
+        // Requirements:
+        //   - Sufficient space (20mib)
+        //   - Host visible (Host refers to CPU. Allows for direct access without needing DMA)
+        // Preferable
+        //  - Device local (Memory on the GPU / APU)
+
+        const kib: u32 = 1024;
+        const mib: u32 = kib * 1024;
+        const minimum_space_required: u32 = mib * 20;
+
+        var memory_type_index: u32 = 0;
+        var memory_type_count = memory_properties.memory_type_count;
+
+        var suitable_memory_type_index_opt: ?u32 = null;
+
+        while (memory_type_index < memory_type_count) : (memory_type_index += 1) {
+            const memory_entry = memory_properties.memory_types[memory_type_index];
+            const heap_index = memory_entry.heap_index;
+
+            if (heap_index == memory_properties.memory_heap_count) {
+                std.log.warn("Invalid heap index {d} for memory type at index {d}. Skipping", .{ heap_index, memory_type_index });
+                continue;
+            }
+
+            const heap_size = memory_properties.memory_heaps[heap_index].size;
+
+            if (heap_size < minimum_space_required) {
+                continue;
+            }
+
+            const memory_flags = memory_entry.property_flags;
+            if (memory_flags.host_visible_bit) {
+                suitable_memory_type_index_opt = memory_type_index;
+                if (memory_flags.device_local_bit) {
+                    break :blk memory_type_index;
+                }
+            }
+        }
+
+        if (suitable_memory_type_index_opt) |suitable_memory_type_index| {
+            break :blk suitable_memory_type_index;
+        }
+
+        return error.NoValidVulkanMemoryTypes;
+    };
+
+    std.log.info("Memory type selected: {d}", .{mesh_memory_index});
+
     var texture_width: u32 = glyph_set.width();
     var texture_height: u32 = glyph_set.height();
 
@@ -965,7 +1021,7 @@ fn setupApplication(allocator: Allocator, app: *GraphicsContext) !void {
         .s_type = vk.StructureType.memory_allocate_info,
         .p_next = null,
         .allocation_size = texture_memory_requirements.size,
-        .memory_type_index = 1,
+        .memory_type_index = mesh_memory_index,
     }, null);
 
     try app.device_dispatch.bindImageMemory(app.logical_device, texture_image, image_memory, 0);
@@ -1248,7 +1304,7 @@ fn setupApplication(allocator: Allocator, app: *GraphicsContext) !void {
     var mesh_memory = try app.device_dispatch.allocateMemory(app.logical_device, &vk.MemoryAllocateInfo{
         .s_type = vk.StructureType.memory_allocate_info,
         .allocation_size = memory_size,
-        .memory_type_index = 1, // TODO: Audit
+        .memory_type_index = mesh_memory_index,
         .p_next = null,
     }, null);
 
@@ -1702,6 +1758,19 @@ fn update(allocator: Allocator, app: *GraphicsContext) !void {
         // As a result it is better to allocate outside of the function
         var progress_bar_quads = try face_writer.allocate(2);
         ui.progress_bar.create(progress_bar_quads, scale_factor, theme);
+
+        // Add an action handler that will start the progress bar callback
+        // when audio starts playing
+        const target_event = event_system.SubsystemActionIndex{
+            .subsystem = ui.subsystem_index,
+            .index = ui.doStartProgressBar(),
+        };
+        const origin_event = event_system.SubsystemActionIndex{
+            .subsystem = audio.subsystem_index,
+            .index = @intCast(event_system.ActionIndex, @enumToInt(audio.AudioEvent.started)),
+        };
+
+        _ = event_system.internalEventsBind(.{ .origin = origin_event, .target = target_event });
     }
 
     try ui.playlist_buttons.next.draw(&face_writer, scale_factor, theme);
@@ -1787,6 +1856,8 @@ fn update(allocator: Allocator, app: *GraphicsContext) !void {
 
         if (navigation.playlist_path_opt) |playlist_path| {
             const track_view_model = try TrackViewModel.create(&main_arena, playlist_path, 0, 20);
+            // _ = try std.Thread.spawn(.{}, audio.mp3.calculateDurationsFromFilePaths, .{track_view_model});
+
             const draw_region = geometry.Extent2D(ScreenPixelBaseType){
                 .x = screen_dimensions.width - 600,
                 .y = 103,
@@ -2174,6 +2245,8 @@ fn appLoop(allocator: Allocator, app: *GraphicsContext) !void {
             try recreateSwapchain(allocator, app);
         }
 
+        const frame_start_ms: i64 = std.time.milliTimestamp();
+
         if (is_draw_required) {
             try update(allocator, app);
             is_render_requested = true;
@@ -2188,10 +2261,12 @@ fn appLoop(allocator: Allocator, app: *GraphicsContext) !void {
             is_render_requested = false;
         }
 
-        const frame_start_ms: i64 = std.time.milliTimestamp();
-
         const frame_end_ms: i64 = std.time.milliTimestamp();
         const frame_duration_ms = frame_end_ms - frame_start_ms;
+
+        event_system.handleTimeEvents(frame_start_ms);
+        // TODO: Call only when required
+        is_render_requested = true;
 
         // TODO: I think the loop is running less than 1ms so you should update
         //       to nanosecond precision
