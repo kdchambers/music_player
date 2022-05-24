@@ -25,21 +25,6 @@ const ScreenScaleFactor = graphics.ScreenScaleFactor(.{ .NDCRightType = ScreenNo
 
 const ui = @This();
 
-// bind(event, action_list);
-
-// const toggle_button = playlist_buttons.toggle.create(extent, theme);
-// toggle_button_widget = try toggle_button.draw(&face_writer, scale_factor);
-//
-// event_system.bind(toggle_button_widget.onClickedLeft(), toggle_button_widget.doToggle());
-
-// Things that would force a redraw but not change event bindings..
-
-// 1. Screen resize
-// 2.
-
-// Ok, well how should I not bind actions to events?
-//
-
 pub const Widget = struct {
     face_index: u16,
     face_count: u16,
@@ -258,26 +243,45 @@ pub const track_view = struct {
         glyph_set: GlyphSet,
         scale_factor: ScreenScaleFactor,
         theme: Theme,
+        draw_region: geometry.Extent2D(ScreenPixelBaseType),
     ) !void {
-        // const track_item_background_color_index = action.color_list.append(theme.track_background);
-        // const track_item_on_hover_color_index = action.color_list.append(theme.track_background_hovered);
+        std.debug.assert(draw_region.width >= 200);
+        std.debug.assert(draw_region.height >= 200);
+
+        const button_margin_pixels: u16 = 10;
+        const button_margin = scale_factor.convertLength(.pixel, .ndc_right, .horizontal, button_margin_pixels);
+        const text_region_width: u16 = draw_region.width - (button_margin_pixels * 2);
+
+        const top_left_normalized = scale_factor.convertPoint(.pixel, .ndc_right, .{ .x = draw_region.x, .y = draw_region.y });
+
+        const draw_region_normalized = geometry.Extent2D(ScreenNormalizedBaseType){
+            .x = top_left_normalized.x,
+            .y = top_left_normalized.y,
+            .width = scale_factor.convertLength(.pixel, .ndc_right, .horizontal, draw_region.width),
+            .height = scale_factor.convertLength(.pixel, .ndc_right, .vertical, draw_region.height),
+        };
+
+        const background_color = graphics.RGBA(f32){
+            .r = 0.6,
+            .g = 0.4,
+            .b = 0.6,
+            .a = 1.0,
+        };
+
+        (try face_writer.create()).* = graphics.generateQuadColored(GenericVertex, draw_region_normalized, background_color, .top_left);
 
         // TODO: Remove sanity checks when more stable
         std.debug.assert(model_interface.entries().len < 20);
         for (model_interface.entries()) |track_entry, track_index| {
-            const track_name = track_entry.title(); // track_metadata.title[0..track_metadata.title_length];
-
-            std.log.info("Track name: {s}", .{track_name});
+            const track_name = track_entry.title();
 
             std.debug.assert(track_name.len < 40);
-
             std.debug.assert(track_name.len > 0);
-            std.log.info("Track name: '{s}'", .{track_name});
 
             const track_item_extent = geometry.Extent2D(ScreenNormalizedBaseType){
-                .x = 0.2,
-                .y = -0.7 + (@intToFloat(f32, track_index) * (30 * scale_factor.vertical)),
-                .width = 600 * scale_factor.horizontal,
+                .x = top_left_normalized.x + button_margin,
+                .y = top_left_normalized.y + (@intToFloat(f32, track_index) * (30 * scale_factor.vertical)),
+                .width = scale_factor.convertLength(.pixel, .ndc_right, .horizontal, text_region_width),
                 .height = 30 * scale_factor.vertical,
             };
 
@@ -289,10 +293,13 @@ pub const track_view = struct {
             const null_action = event_system.SubsystemActionIndex.null_value;
             var action_config = gui.button.ActionConfig{
                 .on_hover_color_opt = @intCast(u8, gui.color_list.append(theme.track_background_hovered)),
-                .on_click_left_action_list = [4]event_system.SubsystemActionIndex{ play_track_action, null_action, null_action, null_action },
+                .on_click_left_action_list = [4]event_system.SubsystemActionIndex{
+                    play_track_action,
+                    null_action,
+                    null_action,
+                    null_action,
+                },
             };
-
-            // const track_item_quad_index = face_writer.*.used;
 
             const track_item_faces = try gui.button.generate(
                 GenericVertex,
@@ -572,31 +579,68 @@ pub const header = struct {
 };
 
 pub const progress_bar = struct {
-    pub const background = struct {
+    var progress_bar_face_quad_opt: ?*geometry.QuadFace(GenericVertex) = null;
+
+    // TODO: Make global
+    var stored_scale_factor: ?ScreenScaleFactor = null;
+    // var stored_background_color: graphics.RGBA(f32) = undefined;
+    // TODO: You have access to the existing color
+    var stored_forground_color: graphics.RGBA(f32) = undefined;
+
+    const Config = struct {
+        progress_bar_update_interval_milliseconds: u32 = 200,
+        background_color: graphics.RGBA(f32) = undefined,
+        foreground_color: graphics.RGBA(f32) = undefined,
+    };
+
+    pub fn update() void {
+        if (progress_bar_face_quad_opt) |progress_bar_face_quad| {
+            const progress = audio.output.progress() catch 0.0;
+            foreground.draw(progress_bar_face_quad, progress, stored_scale_factor, stored_forground_color);
+        }
+    }
+
+    pub fn create(
+        faces: []graphics.QuadFace(GenericVertex),
+        scale_factor: ScreenScaleFactor,
+        theme: Theme,
+    ) void {
+        std.debug.assert(faces.len == 2);
+        stored_scale_factor = scale_factor;
+        stored_forground_color = theme.progress_bar_foreground;
+
+        const progress = audio.output.progress() catch 0.0;
+        background.draw(&faces[0], scale_factor, theme.progress_bar_background);
+        foreground.draw(&faces[1], progress, scale_factor, theme.progress_bar_foreground);
+        // const callback_id = event_system.timeIntervalEventRegister(.{ .interval_milliseconds = config.progress_bar_update_interval_milliseconds, .callback = update });
+        // event_system.timeIntervalEventStart(callback_id);
+    }
+
+    const background = struct {
         pub fn draw(
-            face_writer: *QuadFaceWriter(GenericVertex),
+            face_quad: *graphics.QuadFace(GenericVertex),
             scale_factor: ScreenScaleFactor,
-            theme: Theme,
-        ) !void {
+            color: graphics.RGBA(f32),
+        ) void {
             const progress_bar_width: f32 = 1.0;
             const progress_bar_margin: f32 = (2.0 - progress_bar_width) / 2.0;
             const progress_bar_extent = geometry.Extent2D(ScreenNormalizedBaseType){
                 .x = -1.0 + progress_bar_margin,
                 .y = 0.87,
                 .width = progress_bar_width,
-                .height = 8 * scale_factor.vertical,
+                .height = 6 * scale_factor.vertical,
             };
-            (try face_writer.create()).* = graphics.generateQuadColored(GenericVertex, progress_bar_extent, theme.progress_bar_background, .bottom_left);
+            face_quad.* = graphics.generateQuadColored(GenericVertex, progress_bar_extent, color, .bottom_left);
         }
     };
 
-    pub const foreground = struct {
+    const foreground = struct {
         pub fn draw(
-            face_writer: *QuadFaceWriter(GenericVertex),
+            face_quad: *graphics.QuadFace(GenericVertex),
             progress_percentage: f32,
             scale_factor: ScreenScaleFactor,
-            theme: Theme,
-        ) !u16 {
+            color: graphics.RGBA(f32),
+        ) void {
             const width: f32 = 1.0;
             const margin: f32 = (2.0 - width) / 2.0;
 
@@ -607,10 +651,8 @@ pub const progress_bar = struct {
                 .x = -1.0 + margin + inner_margin_horizontal,
                 .y = 0.8 - inner_margin_vertical,
                 .width = width - (inner_margin_horizontal * 2.0),
-                .height = 6 * scale_factor.vertical,
+                .height = 4 * scale_factor.vertical,
             };
-
-            const audio_progress_bar_faces_quad_index: u16 = face_writer.*.used;
 
             std.debug.assert(progress_percentage >= 0.0 and progress_percentage <= 1.0);
             const progress_extent = geometry.Extent2D(ScreenNormalizedBaseType){
@@ -620,9 +662,7 @@ pub const progress_bar = struct {
                 .height = extent.height,
             };
 
-            var faces = try face_writer.allocate(1);
-            faces[0] = graphics.generateQuadColored(GenericVertex, progress_extent, theme.progress_bar_foreground, .bottom_left);
-            return audio_progress_bar_faces_quad_index;
+            face_quad.* = graphics.generateQuadColored(GenericVertex, progress_extent, color, .bottom_left);
         }
     };
 };

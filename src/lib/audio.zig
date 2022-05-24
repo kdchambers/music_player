@@ -60,6 +60,13 @@ pub fn doAction(action_index: event_system.ActionIndex) void {
     }
 }
 
+pub fn reset() void {
+    loaded_tracks.clear();
+    action_list.clear();
+    _ = input_event_buffer.collect();
+    _ = output_event_buffer.collect();
+}
+
 const toSlice = memory.sliceFromNullTerminatedString;
 
 pub const TrackMetadataStorage = packed struct {

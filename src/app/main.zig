@@ -1690,12 +1690,20 @@ fn update(allocator: Allocator, app: *GraphicsContext) !void {
 
     ui.reset();
     navigation.reset();
+    audio.reset();
 
     var face_writer = quad_face_writer_pool.create(0, vertices_range_size / @sizeOf(GenericVertex));
 
     try ui.header.draw(&face_writer, glyph_set, scale_factor, theme);
     try ui.footer.draw(&face_writer, theme);
-    try ui.progress_bar.background.draw(&face_writer, scale_factor, theme);
+
+    {
+        // Progress bar will only ever required 2 quads
+        // As a result it is better to allocate outside of the function
+        var progress_bar_quads = try face_writer.allocate(2);
+        ui.progress_bar.create(progress_bar_quads, scale_factor, theme);
+    }
+
     try ui.playlist_buttons.next.draw(&face_writer, scale_factor, theme);
     try ui.playlist_buttons.previous.draw(&face_writer, scale_factor, theme);
 
@@ -1779,12 +1787,19 @@ fn update(allocator: Allocator, app: *GraphicsContext) !void {
 
         if (navigation.playlist_path_opt) |playlist_path| {
             const track_view_model = try TrackViewModel.create(&main_arena, playlist_path, 0, 20);
+            const draw_region = geometry.Extent2D(ScreenPixelBaseType){
+                .x = screen_dimensions.width - 600,
+                .y = 103,
+                .width = 600,
+                .height = 800,
+            };
             try ui.track_view.draw(
                 &face_writer,
                 track_view_model,
                 glyph_set,
                 scale_factor,
                 theme,
+                draw_region,
             );
         }
     }
