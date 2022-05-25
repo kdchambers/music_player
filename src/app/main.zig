@@ -41,172 +41,6 @@ const AbsolutePath = storage.AbsolutePath;
 const String = storage.String;
 const Playlist = @import("Playlist.zig");
 
-const subsystems = struct {
-    const null_value = std.math.maxInt(event_system.SubsystemIndex);
-
-    var navigation: event_system.SubsystemIndex = null_value;
-    var audio: event_system.SubsystemIndex = null_value;
-    var gui: event_system.SubsystemIndex = null_value;
-};
-
-pub fn assertIndexAlignment(index: u16, comptime alignment: u29) void {
-    std.debug.assert(@ptrToInt(&storage.memory_space[index]) % alignment == 0);
-}
-
-pub const TrackViewModel = struct {
-    const TrackViewModelEntry = struct {
-        title_index: String.Index,
-        artist_index: String.Index,
-        path_index: SubPath.Index,
-        duration_seconds: u16,
-
-        pub fn title(self: @This()) []const u8 {
-            std.debug.assert(self.title_index != String.null_index);
-            return String.value(self.title_index);
-        }
-
-        pub fn artist(self: @This()) []const u8 {
-            std.debug.assert(self.artist_index != String.null_index);
-            return String.value(self.artist_index);
-        }
-
-        // pub fn duration(self: @This()) []const u8 {
-        //     _ = self;
-        //     // TODO: Implemnent
-        //     return "00:00";
-        // }
-
-        pub fn absolutePathZ(self: @This()) ![:0]const u8 {
-            return try SubPath.interface.absolutePathZ(self.path_index);
-        }
-    };
-
-    track_entry_count: u16,
-    parent_path: AbsolutePath.Index,
-    track_list_index: u16,
-
-    pub fn entries(self: @This()) []const TrackViewModelEntry {
-        return @ptrCast([*]const TrackViewModelEntry, @alignCast(2, &storage.memory_space[self.track_list_index]))[0..self.track_entry_count];
-    }
-
-    pub fn entriesMut(self: @This()) []TrackViewModelEntry {
-        return @ptrCast([*]TrackViewModelEntry, @alignCast(2, &storage.memory_space[self.track_list_index]))[0..self.track_entry_count];
-    }
-
-    pub fn getTrackFilename(self: @This(), index: u8) []const u8 {
-        std.debug.assert(index < self.entry_count);
-        const entry_list = @intToPtr([*]TrackViewModelEntry, @ptrToInt(&self) + @sizeOf(@This()))[0..self.entry_count];
-        return entry_list[index].path();
-    }
-
-    pub fn getTitle(self: @This(), index: u8) []const u8 {
-        const track_list = @ptrCast([*]const TrackViewModelEntry, @alignCast(2, &storage.memory_space[self.track_list_index]));
-        return String.value(track_list[index].title_index);
-    }
-
-    pub fn parseExtension(file_name: []const u8) ![]const u8 {
-        std.debug.assert(file_name.len > 0);
-        if (file_name.len <= 4) {
-            return error.NoExtension;
-        }
-
-        var i: usize = file_name.len - 1;
-        while (i > 0) : (i -= 1) {
-            if (file_name[i] == '.') {
-                return file_name[i + 1 ..];
-            }
-        }
-        return error.NoExtension;
-    }
-
-    pub fn matchExtension(extension: []const u8, string: []const u8) bool {
-        if (string.len < extension.len) return false;
-        for (extension) |char, i| {
-            if (char != std.ascii.toUpper(string[i])) {
-                return false;
-            }
-        }
-        return true;
-    }
-
-    pub fn log(self: @This()) void {
-        std.log.info("Parent path: \"{s}\"", .{AbsolutePath.interface.path(self.parent_path)});
-        std.log.info("Tracks: {d}", .{self.track_entry_count});
-        var track_i: u32 = 0;
-        var track_list = @ptrCast([*]const TrackViewModelEntry, @alignCast(2, &storage.memory_space[self.track_list_index]));
-
-        while (track_i < self.track_entry_count) : (track_i += 1) {
-            const track = track_list[track_i];
-            const null_string = "null";
-
-            {
-                const file_path_value = if (track.path_index == String.null_index) null_string else SubPath.interface.path(track.path_index);
-                std.log.info("  File Path: \"{s}\"", .{file_path_value});
-            }
-
-            {
-                const title_value = if (track.title_index == String.null_index) null_string else String.value(track.title_index);
-                std.log.info("  Title #{d}: \"{s}\"", .{ track_i + 1, title_value });
-            }
-        }
-    }
-
-    pub fn create(
-        arena: *memory.LinearArena,
-        directory: std.fs.Dir,
-        entry_offset: u32,
-        max_entries: u16,
-    ) !*TrackViewModel {
-        _ = entry_offset;
-
-        var head = arena.create(TrackViewModel);
-        head.track_entry_count = 0;
-
-        var output_buffer: [512]u8 = undefined;
-        const source_parent_path = try directory.realpath(".", output_buffer[0..]);
-        head.parent_path = try AbsolutePath.write(arena, source_parent_path, 256);
-
-        var track_entries = arena.allocate(TrackViewModelEntry, max_entries);
-        head.track_list_index = arena.indexFor(@ptrCast(*u8, track_entries.ptr));
-
-        // Assert track_entries has alignment of 2
-        std.debug.assert(@ptrToInt(track_entries.ptr) % 2 == 0);
-
-        var iterator = directory.iterate();
-        while (try iterator.next()) |entry| {
-            if (head.track_entry_count >= max_entries) {
-                std.log.warn("Hit max playlist size ({d}). Some tracks may be ignored", .{max_entries});
-                break;
-            }
-            if (entry.kind == .File) {
-                const extension = parseExtension(entry.name) catch "";
-                if (matchExtension("MP3", extension) or matchExtension("FLAC", extension)) {
-                    track_entries[head.track_entry_count].path_index = try SubPath.write(arena, entry.name, head.parent_path);
-                    assertIndexAlignment(track_entries[head.track_entry_count].path_index, 2);
-
-                    var file = directory.openFile(entry.name, .{}) catch |err| {
-                        std.log.err("Failed to open file '{s}' with err {s}", .{ entry.name, err });
-                        return err;
-                    };
-                    defer file.close();
-
-                    const meta_values = try (audio.mp3.loadMetaFromFileFunction(.{
-                        .load_artist = true,
-                        .load_title = true,
-                    }).loadMetaFromFile(arena, file));
-
-                    track_entries[head.track_entry_count].title_index = meta_values.title;
-                    track_entries[head.track_entry_count].artist_index = meta_values.artist;
-
-                    head.track_entry_count += 1;
-                }
-            }
-        }
-
-        return head;
-    }
-};
-
 //
 // CONTENTS:
 //
@@ -245,10 +79,13 @@ pub const TrackViewModel = struct {
 //
 
 var is_render_requested: bool = true;
+var is_draw_required: bool = true;
+
 var current_audio_index: u16 = 0;
 var quad_face_writer_pool: QuadFaceWriterPool(GenericVertex) = undefined;
 var main_arena = memory.LinearArena{};
 var directory_list: [][]const u8 = undefined;
+
 const ScreenScaleFactor = graphics.ScreenScaleFactor(
     .{
         .NDCRightType = ScreenNormalizedBaseType,
@@ -256,22 +93,6 @@ const ScreenScaleFactor = graphics.ScreenScaleFactor(
     },
 );
 var scale_factor: ScreenScaleFactor = undefined;
-var track_metadatas: FixedBuffer(audio.TrackMetadata, 20) = undefined;
-
-//
-// Events
-//
-
-var on_media_toggle_clicked: u32 = 0;
-var media_button_face_index: u16 = 0;
-
-//
-// For each arena, you need a list of checkpoints
-//
-
-// Actions that invalidate memory
-// Directory changed
-// Track changed
 
 const RewindLevel = enum(u8) {
     directory_changed = 0,
@@ -297,8 +118,6 @@ const AudioDurationTime = packed struct {
 
 var rewind_points: RewindPoints = .{};
 
-// Globals
-
 var screen_dimensions = geometry.Dimensions2D(ScreenPixelBaseType){
     .width = 0,
     .height = 0,
@@ -306,7 +125,6 @@ var screen_dimensions = geometry.Dimensions2D(ScreenPixelBaseType){
 
 var current_frame: u32 = 0;
 var framebuffer_resized: bool = true;
-var is_draw_required: bool = true;
 var mapped_device_memory: [*]u8 = undefined;
 const max_texture_quads_per_render: u32 = 1024 * 2;
 
@@ -353,9 +171,9 @@ const help_message =
 // const library_root_path = "../../../../mnt/data/media/music";
 
 // TODO: You can define this with a env variable
-const library_root_path = "assets/example_library";
+// const library_root_path = "assets/example_library";
+const library_root_path = "../../../../mnt/wd_hdd/media/music";
 var library_navigator: LibraryNavigator = undefined;
-var track_metadatas_opt: ?[]audio.TrackMetadataIndices = null;
 var audio_files: FixedBuffer([:0]const u8, 20) = undefined;
 var image_memory_map: [*]u8 = undefined;
 var texture_size_bytes: usize = 0;
@@ -370,15 +188,10 @@ pub fn main() !void {
     defer _ = gpa.deinit();
 
     navigation.subsystem_index = event_system.registerActionHandler(&navigation.doAction);
-
     audio.subsystem_index = event_system.registerActionHandler(&audio.doAction);
-    subsystems.gui = event_system.registerActionHandler(&gui.doAction);
+    gui.subsystem_index = event_system.registerActionHandler(&gui.doAction);
     ui.subsystem_index = event_system.registerActionHandler(&ui.doAction);
     Playlist.subsystem_index = event_system.registerActionHandler(&Playlist.doAction);
-
-    std.debug.assert(navigation.subsystem_index == 0);
-    std.debug.assert(audio.subsystem_index == 1);
-    std.debug.assert(subsystems.gui == 2);
 
     var allocator = gpa.allocator();
 
@@ -1364,7 +1177,7 @@ fn setupApplication(allocator: Allocator, app: *GraphicsContext) !void {
     {
         const vertices_base = @ptrCast([*]GenericVertex, &mapped_device_memory[vertices_range_index_begin]);
         const vertex_buffer_capacity = vertices_range_size / @sizeOf(GenericVertex);
-        gui.init(&main_arena, subsystems.gui, vertices_base[0..vertex_buffer_capacity]);
+        gui.init(&main_arena, vertices_base[0..vertex_buffer_capacity]);
     }
 
     // if (vk.vkMapMemory(app.logical_device, mesh_memory, 0, memory_size, 0, @ptrCast(**anyopaque, &mapped_device_memory)) != .success) {
@@ -1592,12 +1405,6 @@ fn swapTexture(app: *GraphicsContext) !void {
     }
 }
 
-fn toUpper(string: *[]u8) void {
-    for (string.*) |*char| {
-        char.* = std.ascii.toUpper(char.*);
-    }
-}
-
 fn handleAudioPlay(allocator: Allocator, action_payload: action.PayloadAudioPlay) !void {
     if (rewind_points.audio_started != RewindPoints.null_value) {
         main_arena.rewindTo(rewind_points.audio_started);
@@ -1778,8 +1585,6 @@ fn update(allocator: Allocator, app: *GraphicsContext) !void {
 
     try ui.playlist_buttons.next.draw(&face_writer, scale_factor, theme);
     try ui.playlist_buttons.previous.draw(&face_writer, scale_factor, theme);
-
-    media_button_face_index = face_writer.used;
 
     {
         const play_button = try ui.playlist_buttons.toggle.draw(&face_writer, scale_factor, theme);
@@ -2040,18 +1845,6 @@ fn secondsToAudioDurationTime(seconds: u16) AudioDurationTime {
 
 // is_render_requested = true;
 // }
-
-fn toSlice(null_terminated_string: [*:0]const u8) []const u8 {
-    var count: u32 = 0;
-    const max: u32 = 1024;
-    while (count < max) : (count += 1) {
-        if (null_terminated_string[count] == 0) {
-            return null_terminated_string[0..count];
-        }
-    }
-    std.log.err("Failed to find null terminator in string after {d} charactors", .{max});
-    unreachable;
-}
 
 fn handleAudioFinished() void {
     const allocator = std.heap.c_allocator;

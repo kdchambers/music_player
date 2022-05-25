@@ -41,7 +41,7 @@ pub var vertex_range_attachments: memory.FixedBuffer(VertexRange, 40) = .{};
 
 pub var module_arena: memory.LinearArena = .{};
 pub var vertex_buffer: []GenericVertex = undefined;
-pub var subsystem_id: event_system.SubsystemIndex = undefined;
+pub var subsystem_index: event_system.SubsystemIndex = undefined;
 
 pub const InternalEvent = enum(u8) {
     vertices_modified,
@@ -60,11 +60,8 @@ pub fn reset() void {
 
 pub fn init(
     arena: *memory.LinearArena,
-    subsystem: event_system.SubsystemIndex,
     vertices: []GenericVertex,
 ) void {
-    std.debug.assert(subsystem == 2);
-
     const alignment = 4;
     const allocation_size = 1024;
     var sub_allocation = arena.allocateAligned(u8, alignment, allocation_size);
@@ -73,7 +70,6 @@ pub fn init(
         .used = 0,
     };
     vertex_buffer = vertices;
-    subsystem_id = subsystem;
 }
 
 pub fn doColorSet(payload: PayloadColorSet) void {
@@ -516,12 +512,12 @@ pub const button = struct {
             std.debug.assert(hover_exit_action_index == (hover_enter_action_index + 1));
 
             const hover_enter_global_action = [1]event_system.SubsystemActionIndex{.{
-                .subsystem = subsystem_id,
+                .subsystem = subsystem_index,
                 .index = @intCast(event_system.ActionIndex, hover_enter_action_index),
             }};
 
             const hover_exit_global_action = [1]event_system.SubsystemActionIndex{.{
-                .subsystem = subsystem_id,
+                .subsystem = subsystem_index,
                 .index = @intCast(event_system.ActionIndex, hover_exit_action_index),
             }};
 
