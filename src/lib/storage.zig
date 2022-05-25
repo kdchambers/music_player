@@ -87,7 +87,6 @@ pub const String = struct {
     }
 
     pub inline fn length(index: String.Index) u16 {
-        std.log.info("Index: {d}", .{index});
         std.debug.assert(@ptrToInt(&storage.memory_space[index]) % 2 == 0);
         const base_ptr = @ptrCast([*]const u8, @alignCast(2, &storage.memory_space[index]));
         return @ptrCast(*const u16, &base_ptr[length_index]).*;

@@ -20,6 +20,7 @@ const LibraryNavigator = @import("LibraryNavigator");
 const audio = @import("audio");
 const memory = @import("memory");
 const navigation = @import("navigation.zig").navigation;
+const Playlist = @import("Playlist");
 
 const ScreenScaleFactor = graphics.ScreenScaleFactor(.{ .NDCRightType = ScreenNormalizedBaseType, .PixelType = ScreenPixelBaseType });
 
@@ -66,6 +67,7 @@ var arena: memory.LinearArena = undefined;
 
 pub fn reset() void {
     gui.reset();
+    action_list.clear();
 }
 
 pub const playlist_buttons = struct {
@@ -292,16 +294,21 @@ pub const track_view = struct {
 
         // TODO: Remove sanity checks when more stable
         std.debug.assert(model_interface.entries().len < 20);
-        for (model_interface.entries()) |track_entry, track_index| {
-            const track_name = track_entry.title();
 
-            std.debug.assert(track_name.len < 40);
-            std.debug.assert(track_name.len > 0);
+        var duration_label_buffer: [10]u8 = undefined;
+        const label_width = scale_factor.convertLength(.pixel, .ndc_right, .horizontal, text_region_width);
+
+        for (model_interface.entries()) |track_entry, track_index| {
+            const duration = Playlist.secondsToAudioDurationTime(track_entry.duration_seconds);
+            const duration_label = try std.fmt.bufPrint(duration_label_buffer[0..], "{d:0>2}:{d:0>2}", .{ duration.minutes, duration.seconds });
+
+            const button_label = track_entry.title();
+            std.debug.assert(button_label.len > 0);
 
             const track_item_extent = geometry.Extent2D(ScreenNormalizedBaseType){
                 .x = top_left_normalized.x + button_margin,
                 .y = top_left_normalized.y + (@intToFloat(f32, track_index) * (30 * scale_factor.vertical)),
-                .width = scale_factor.convertLength(.pixel, .ndc_right, .horizontal, text_region_width),
+                .width = label_width,
                 .height = 30 * scale_factor.vertical,
             };
 
@@ -325,7 +332,7 @@ pub const track_view = struct {
                 GenericVertex,
                 face_writer,
                 glyph_set,
-                track_name,
+                button_label,
                 track_item_extent,
                 scale_factor,
                 theme.track_background,
@@ -335,6 +342,24 @@ pub const track_view = struct {
                 .top_left,
             );
             _ = track_item_faces;
+
+            // TODO: Fix dirty 0.0425 vertical alignment hack
+            const duration_label_extent = try gui.calculateRenderedTextDimensions(duration_label, glyph_set, scale_factor, 0.1, 0);
+            const duration_label_placement = geometry.Coordinates2D(ScreenNormalizedBaseType){
+                .x = top_left_normalized.x + label_width - duration_label_extent.width,
+                .y = top_left_normalized.y + 0.0425 + (@intToFloat(f32, track_index) * (30 * scale_factor.vertical)),
+            };
+
+            _ = try gui.generateText(
+                GenericVertex,
+                face_writer,
+                duration_label,
+                duration_label_placement,
+                scale_factor,
+                glyph_set,
+                theme.track_text,
+                null,
+            );
 
             // const track_item_on_left_click_event_id = event_system.registerMouseLeftPressAction(track_item_extent);
 

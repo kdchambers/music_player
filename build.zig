@@ -26,7 +26,7 @@ pub fn build(b: *Builder) void {
     exe.addIncludeDir("deps/glfw/include/");
     exe.addIncludeDir("/usr/include/");
     exe.addIncludeDir("/usr/local/include");
-
+    
     const geometry_pkg = std.build.Pkg{
         .name = "geometry",
         .path = .{ .path = lib_src_path ++ "geometry.zig" },
@@ -148,6 +148,19 @@ pub fn build(b: *Builder) void {
         .dependencies = &[_]Pkg{ graphics_pkg, gui_pkg, memory_pkg },
     };
 
+    const playlist_pkg = std.build.Pkg{
+        .name = "Playlist",
+        .path = .{
+            .path = app_src_path ++ "Playlist.zig",
+        },
+        .dependencies = &[_]Pkg{
+            memory_pkg,
+            audio_pkg,
+            storage_pkg,
+            event_system_pkg,
+        },
+    };
+
     const ui_pkg = std.build.Pkg{
         .name = "ui",
         .path = .{
@@ -164,6 +177,7 @@ pub fn build(b: *Builder) void {
             action_pkg,
             event_system_pkg,
             memory_pkg,
+            playlist_pkg,
         },
     };
 
@@ -222,6 +236,7 @@ pub fn build(b: *Builder) void {
     exe.addPackage(ui_pkg);
     exe.addPackage(action_pkg);
     exe.addPackage(library_navigator_pkg);
+    exe.addPackage(playlist_pkg);
 
     exe.linkLibC();
 

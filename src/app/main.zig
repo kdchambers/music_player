@@ -39,6 +39,7 @@ const storage = @import("storage");
 const SubPath = storage.SubPath;
 const AbsolutePath = storage.AbsolutePath;
 const String = storage.String;
+const Playlist = @import("Playlist.zig");
 
 const subsystems = struct {
     const null_value = std.math.maxInt(event_system.SubsystemIndex);
@@ -373,6 +374,7 @@ pub fn main() !void {
     audio.subsystem_index = event_system.registerActionHandler(&audio.doAction);
     subsystems.gui = event_system.registerActionHandler(&gui.doAction);
     ui.subsystem_index = event_system.registerActionHandler(&ui.doAction);
+    Playlist.subsystem_index = event_system.registerActionHandler(&Playlist.doAction);
 
     std.debug.assert(navigation.subsystem_index == 0);
     std.debug.assert(audio.subsystem_index == 1);
@@ -1747,6 +1749,7 @@ fn update(allocator: Allocator, app: *GraphicsContext) !void {
     ui.reset();
     navigation.reset();
     audio.reset();
+    // event_system.resetBindings();
 
     var face_writer = quad_face_writer_pool.create(0, vertices_range_size / @sizeOf(GenericVertex));
 
@@ -1854,10 +1857,7 @@ fn update(allocator: Allocator, app: *GraphicsContext) !void {
             .top_left,
         );
 
-        if (navigation.playlist_path_opt) |playlist_path| {
-            const track_view_model = try TrackViewModel.create(&main_arena, playlist_path, 0, 20);
-            // _ = try std.Thread.spawn(.{}, audio.mp3.calculateDurationsFromFilePaths, .{track_view_model});
-
+        if (navigation.playlist_path_opt != null) {
             const draw_region = geometry.Extent2D(ScreenPixelBaseType){
                 .x = screen_dimensions.width - 600,
                 .y = 103,
@@ -1866,7 +1866,7 @@ fn update(allocator: Allocator, app: *GraphicsContext) !void {
             };
             try ui.track_view.draw(
                 &face_writer,
-                track_view_model,
+                Playlist.storage,
                 glyph_set,
                 scale_factor,
                 theme,
@@ -2224,9 +2224,20 @@ fn appLoop(allocator: Allocator, app: *GraphicsContext) !void {
             }
         }
 
+        for (Playlist.output_events.collect()) |event| {
+            if (event == .duration_calculated) {
+                std.log.info("Durations calculated. Redraw required", .{});
+                // TODO: Update UI without a full redraw
+                is_draw_required = true;
+                break;
+            }
+        }
+
         for (navigation.message_queue.collect()) |message| {
             // TODO: Switch
             if (message == .playlist_opened) {
+                event_system.resetBindings();
+                try Playlist.create(&main_arena, navigation.playlist_path_opt.?, 0, 20);
                 is_draw_required = true;
                 break;
             }

@@ -12,10 +12,9 @@ const id3 = @import("id3.zig");
 const event_system = @import("event_system");
 const storage = @import("storage");
 const String = storage.String;
+const FixedAtomicEventQueue = @import("message_queue").FixedAtomicEventQueue;
 
 pub var subsystem_index: event_system.SubsystemIndex = event_system.null_subsystem_index;
-
-const FixedAtomicEventQueue = @import("message_queue").FixedAtomicEventQueue;
 
 const mad = @cImport({
     @cInclude("mad.h");
@@ -33,11 +32,6 @@ const ao = @cImport({
 const id3v2 = @cImport({
     @cInclude("id3v2lib.h");
 });
-
-// NOTE: Failed to include
-// const c = @cImport({
-//     @cInclude("errno.h");
-// });
 
 pub const TrackMetadata = struct {
     title_length: u32,
@@ -94,101 +88,23 @@ pub const TrackMetadataStorage = packed struct {
     }
 };
 
-const LinearPlaylist = struct {
-    const Entry = struct {
-        directory_id: u8,
-        artist_id: u8,
-    };
-
-    const Self = @This();
-
-    // TODO: You could remove this by allocating LinearPlaylist on arena + using parent ptr
-    base: [*]u8 = undefined,
-    artist_index: u16 = 0,
-    track_index: u16 = 0,
-    entries_index: u16 = 0,
-    filename_index: u16 = 0,
-
-    current: u8 = 0,
-    artist_count: u8 = 0,
-
-    // NOTE: track_count == entries_count == filename_count
-    track_count: u8 = 0,
-    directories_count: u8 = 0,
-
-    pub fn init(self: *Self, start_addr: [*]u8) void {
-        self.base = start_addr;
-    }
-
-    pub fn addDirectory(self: *Self, arena: *memory.LinearArena, directory_path: []const u8) u8 {
-        const source_len = directory_path.len;
-        var new_path = arena.allocate(u8, source_len + 1);
-        std.mem.copy(u8, new_path, directory_path);
-        new_path[source_len] = 0;
-        defer self.directories_count += 1;
-        return self.directories_count;
-    }
-
-    pub fn name(self: Self, index: u8) []const u8 {
-        std.debug.assert(index < self.track_count);
-        var i: u16 = 0;
-        const mem = self.base[self.track_index];
-
-        {
-            var count: u8 = 0;
-            while (count < index) : (i += 1) {
-                if (mem[i] == 0) {
-                    count += 1;
-                }
-            }
-        }
-
-        const start: [*]const u8 = &mem[i + 1];
-        const max_loop_count: u32 = 1024;
-        i = 0;
-        while (i < max_loop_count) : (i += 1) {
-            if (start[i] == 0) {
-                return start[0..i];
-            }
-        }
-
-        std.debug.assert(i < max_loop_count);
-        unreachable;
-    }
-
-    pub fn filename(self: Self, allocator: Allocator, index: u8) []const u8 {
-        _ = index;
-        _ = allocator;
-        std.debug.assert(index < self.track_count);
-        var i: u16 = 0;
-        const mem = self.base[self.filename_index];
-
-        {
-            var count: u8 = 0;
-            while (count < index) : (i += 1) {
-                if (mem[i] == 0) {
-                    count += 1;
-                }
-            }
-        }
-
-        const start: [*]const u8 = &mem[i + 1];
-        const max_loop_count: u32 = 1024;
-        i = 0;
-        while (i < max_loop_count) : (i += 1) {
-            if (start[i] == 0) {
-                return start[0..i];
-            }
-        }
-
-        std.debug.assert(i < max_loop_count);
-        unreachable;
-    }
-};
-
 var active_thread_handle: std.Thread = undefined;
 var current_audio_buffer: []u8 = undefined;
 var decoded_size: usize = 0;
+
+pub const OutputEvent = enum(u8) {
+    initialized,
+    stopped,
+    finished,
+    started,
+    resumed,
+    paused,
+    volume_up,
+    volume_down,
+    volume_mute,
+    volume_unmute,
+    duration_calculated,
+};
 
 pub const AudioEvent = enum(u8) {
     initialized,
@@ -388,13 +304,8 @@ pub const mp3 = struct {
                     return error.InvalidHeader;
                 }
 
-                std.debug.print("Version {d}.{d}\n", .{ header.version_major, header.version_revision });
-                std.debug.print("Flags {d}\n", .{header.flags});
-
                 // TODO: Implement
                 std.debug.assert(header.flags == 0);
-
-                std.debug.print("Size {d}\n", .{header.size});
 
                 const max_frame_size: u32 = 256;
                 var frame_input_buffer: [max_frame_size]u8 = undefined;
@@ -411,8 +322,6 @@ pub const mp3 = struct {
                 const title_tag = "TIT2";
 
                 while (i <= header.size) {
-                    std.log.info("Index {d} Header {d}", .{ i, header.size });
-
                     _ = try file.read(frame_input_buffer[0..@sizeOf(id3.Frame)]);
                     frame = @ptrCast(*id3.Frame, &frame_input_buffer[0]);
 
@@ -420,8 +329,6 @@ pub const mp3 = struct {
                     if (header.version_major == '4') {
                         frame.size = id3.synchsafeToU32(frame.size);
                     }
-
-                    std.log.info("Frame {d} {s}", .{ frame.size, frame.id[0..] });
 
                     if (frame.id[0] == 0) {
                         // Into post tag padding
@@ -433,8 +340,6 @@ pub const mp3 = struct {
                         return error.InvalidMp3Header;
                     }
 
-                    // const tag_list = [4]const u8 { artist_tag, album_tag, title_tag, duration_tag };
-
                     if (comptime config.load_artist) {
                         if (!is_artist_parsed and std.mem.eql(u8, frame.id[0..], artist_tag)) {
                             is_artist_parsed = true;
@@ -443,14 +348,12 @@ pub const mp3 = struct {
                             _ = try file.read(artist_value);
 
                             const encoding = @intToEnum(id3.TextEncoding, artist_value[0]);
-                            std.log.info("Adding artist '{s}'", .{artist_value});
 
                             if (encoding != .iso_8859_1) {
                                 std.log.warn("Unsupported text encoding: {s}", .{encoding});
                             }
 
                             indices.artist = try String.write(arena, artist_value[1..]);
-                            // indices.artist = add(arena, artist_value[1..], .artist);
                         }
                     }
 
@@ -467,14 +370,11 @@ pub const mp3 = struct {
                                 std.log.warn("Unsupported text encoding: {s}", .{encoding});
                             }
 
-                            std.log.info("Adding album '{s}'", .{album_value[1..]});
                             indices.album = try String.write(arena, album_value[1..]);
-                            // indices.album = add(arena, album_value[1..], .album);
                         }
                     }
 
                     if (comptime config.load_title) {
-                        std.log.info("Attempt to parse title: {s}", .{frame.id[0..]});
                         if (!is_title_parsed and std.mem.eql(u8, frame.id[0..], title_tag)) {
                             is_title_parsed = true;
                             items_parsed_count += 1;
@@ -486,10 +386,7 @@ pub const mp3 = struct {
                                 std.log.warn("Unsupported text encoding: {s}", .{encoding});
                             }
 
-                            std.log.info("TITLE: {s}", .{title_value[1..]});
-
                             indices.title = try String.write(arena, title_value[1..]);
-                            // indices.title = add(arena, title_value[1..], .title);
                         }
                     }
 
@@ -593,7 +490,7 @@ pub const mp3 = struct {
             // const duration_tag = "TLEN";
 
             while (i <= header.size) {
-                std.log.info("Index {d} Header {d}", .{ i, header.size });
+                // std.log.info("Index {d} Header {d}", .{ i, header.size });
 
                 _ = try file.read(frame_input_buffer[0..@sizeOf(id3.Frame)]);
                 frame = @ptrCast(*id3.Frame, &frame_input_buffer[0]);
@@ -692,7 +589,7 @@ pub const mp3 = struct {
         _ = frame;
         _ = data;
 
-        log.err("Failure in mp3 decoding '{s}'", .{mad.mad_stream_errorstr(stream)});
+        std.log.err("Failure in mp3 decoding '{s}'", .{mad.mad_stream_errorstr(stream)});
         return mad.MAD_FLOW_CONTINUE;
     }
 
@@ -828,6 +725,10 @@ pub const mp3 = struct {
                 return mad.MAD_FLOW_STOP;
             }
 
+            if (playback_state != .playing) {
+                std.log.warn("Playback state not .playing", .{});
+            }
+
             const left_block = @bitCast(u16, scale(channel_left[sample_index]));
 
             //
@@ -860,6 +761,16 @@ pub const mp3 = struct {
         .buffer = undefined,
     };
 
+    pub fn calculateDurationSecondsFromFile(input_buffer: *[]const u8) u32 {
+        var decoder: mad.mad_decoder = undefined;
+        output.audio_duration = 0.0;
+        mad.mad_decoder_init(&decoder, @ptrCast(*anyopaque, input_buffer), inputCallback, headerCallback, null, null, errorCallback, null);
+        _ = mad.mad_decoder_run(&decoder, mad.MAD_DECODER_MODE_SYNC);
+        _ = mad.mad_decoder_finish(&decoder);
+        is_decoded = false;
+        return @floatToInt(u32, output.audio_duration);
+    }
+
     fn decode(input_buffer: *[]const u8) void {
         var decoder: mad.mad_decoder = undefined;
         // Initial decode to read headers and calculate length
@@ -872,6 +783,9 @@ pub const mp3 = struct {
 
         // TODO: Don't hardcode these values
         output.audio_length = @floatToInt(u32, output.audio_duration) * 2 * 2 * 44100;
+
+        std.log.info("Audio duration: {d}", .{output.audio_duration});
+        std.log.info("Audio length: {d}", .{output.audio_length});
         is_decoded = false;
 
         const get_track_length_end_ts: i64 = std.time.milliTimestamp();
@@ -890,6 +804,8 @@ pub const mp3 = struct {
         output_event_buffer.add(.started) catch |err| {
             log.err("Failed to add output event: {s}", .{err});
         };
+
+        event_system.internalEventHandle(.{ .subsystem = subsystem_index, .index = @intCast(event_system.ActionIndex, @enumToInt(AudioEvent.started)) });
 
         mad.mad_decoder_init(&decoder, @ptrCast(*anyopaque, input_buffer), inputCallback, null, null, outputCallback, errorCallback, null);
         _ = mad.mad_decoder_run(&decoder, mad.MAD_DECODER_MODE_SYNC);
@@ -1191,11 +1107,22 @@ pub const output = struct {
     }
 
     pub fn progress() !f32 {
+        std.log.info("Progress called", .{});
         if (playback_state == .stopped) {
             return error.NoAudioSource;
         }
 
-        return @intToFloat(f32, audio_length) / @intToFloat(f32, audio_index);
+        std.debug.assert(audio_length > 0);
+
+        if (audio_index >= audio_length) {
+            return 1.0;
+        }
+
+        // TODO: audio_length exceeds audio_index at the end of a track
+        //       Probably the last sample to be added is incomplete
+        std.debug.assert(audio_length >= audio_index);
+
+        return @intToFloat(f32, audio_index) / @intToFloat(f32, audio_length);
     }
 
     pub fn trackLengthSeconds() !u32 {

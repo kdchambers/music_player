@@ -40,8 +40,6 @@ pub const LinearArena = struct {
     }
 
     pub fn allocateAligned(self: *Self, comptime T: type, comptime alignment: u23, amount: u16) []T {
-        std.log.info("Allocating {d} bytes from remaining pool of {d}", .{ amount * @sizeOf(T), self.memory.len - self.used });
-
         std.debug.assert(self.used < self.memory.len);
         const misaligned_by = (@ptrToInt(&self.memory[self.used]) % alignment);
         const alignment_padding = blk: {
@@ -51,17 +49,11 @@ pub const LinearArena = struct {
             break :blk 0;
         };
 
-        if (alignment_padding > 0) {
-            std.log.warn("Adding {d} bytes of padding for alignment", .{alignment_padding});
-        }
-
         const bytes_required = alignment_padding + (amount * @sizeOf(T));
         std.debug.assert((self.memory.len - self.used) >= bytes_required);
         defer self.used += @intCast(u16, bytes_required);
         var aligned_ptr = @ptrCast([*]T, @alignCast(alignment, &self.memory[self.used + alignment_padding]));
         std.debug.assert(@ptrToInt(aligned_ptr) % alignment == 0);
-
-        // std.log.info("Allocated {d} bytes: {d} remaining", .{ bytes_required, self.memory.len - self.used });
 
         return aligned_ptr[0..amount];
     }
@@ -87,18 +79,12 @@ pub const LinearArena = struct {
         };
         std.debug.assert(alignment_padding < alignment);
 
-        if (alignment_padding > 0) {
-            std.log.warn("Adding {d} bytes of alignment", .{alignment_padding});
-        }
-
         const bytes_required = alignment_padding + @sizeOf(T);
         std.debug.assert((self.memory.len - self.used) >= bytes_required);
 
         defer self.used += @intCast(u16, bytes_required);
         var aligned_ptr = @ptrCast(*T, @alignCast(alignment, &self.memory[self.used + alignment_padding]));
         std.debug.assert(@ptrToInt(aligned_ptr) % alignment == 0);
-
-        std.log.info("Allocated {d} bytes: {d} remaining", .{ bytes_required, (self.memory.len - self.used) - bytes_required });
 
         return aligned_ptr;
     }
