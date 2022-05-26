@@ -1117,8 +1117,7 @@ pub const output = struct {
             return error.NoAudioSource;
         }
 
-        std.debug.assert(audio_length > 0);
-
+        std.debug.assert(audio_length >= 0);
         if (audio_index >= audio_length) {
             return 1.0;
         }

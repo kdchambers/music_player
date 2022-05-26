@@ -317,8 +317,8 @@ pub const track_view = struct {
             };
 
             const play_track_action = event_system.SubsystemActionIndex{
-                .subsystem = audio.subsystem_index,
-                .index = audio.mp3.doPlayAudio(track_entry.path_index),
+                .subsystem = Playlist.subsystem_index,
+                .index = Playlist.doPlayIndex(@intCast(u16, track_index)),
             };
 
             const null_action = event_system.SubsystemActionIndex.null_value;

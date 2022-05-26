@@ -17,10 +17,14 @@ const ScreenNormalizedBaseType = constants.ScreenNormalizedBaseType;
 const ScreenPixelBaseType = constants.ScreenPixelBaseType;
 
 pub const ActionIndex = u12;
+pub const EventIndex = u12;
 pub const SubsystemIndex = u4;
 
 pub const InternalEventBinding = struct {
-    origin: SubsystemActionIndex,
+    /// Event that occurs within the system
+    origin: SubsystemEventIndex,
+
+    /// Action that is to be invoked in response
     target: SubsystemActionIndex,
 };
 
@@ -103,7 +107,14 @@ pub fn handleTimeEvents(timestamp_ms: i64) void {
         if (event_entry.start_timestamp_ms == 0) {
             continue;
         }
-        std.debug.assert(timestamp_ms >= event_entry.last_called_timestamp_ms);
+
+        if (timestamp_ms < event_entry.last_called_timestamp_ms) {
+            // This is possible as last_called_timestamp can be initialized
+            // from another thread between this point and when
+            // timestamp_ms is created in the app loop
+            continue;
+        }
+
         var since_last_call = timestamp_ms - event_entry.last_called_timestamp_ms;
         var i: u32 = 0;
         while (since_last_call >= event_entry.interval_milliseconds) : (i += 1) {
@@ -118,6 +129,11 @@ pub fn handleTimeEvents(timestamp_ms: i64) void {
         }
     }
 }
+
+pub const SubsystemEventIndex = packed struct {
+    subsystem: SubsystemIndex,
+    index: EventIndex,
+};
 
 pub const SubsystemActionRange = packed struct {
     subsystem: SubsystemIndex,

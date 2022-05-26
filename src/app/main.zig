@@ -1467,15 +1467,16 @@ fn update(allocator: Allocator, app: *GraphicsContext) !void {
         var progress_bar_quads = try face_writer.allocate(2);
         ui.progress_bar.create(progress_bar_quads, scale_factor, theme);
 
+        const origin_event = event_system.SubsystemEventIndex{
+            .subsystem = audio.subsystem_index,
+            .index = @intCast(event_system.EventIndex, @enumToInt(audio.AudioEvent.started)),
+        };
+
         // Add an action handler that will start the progress bar callback
         // when audio starts playing
         const target_event = event_system.SubsystemActionIndex{
             .subsystem = ui.subsystem_index,
             .index = ui.doStartProgressBar(),
-        };
-        const origin_event = event_system.SubsystemActionIndex{
-            .subsystem = audio.subsystem_index,
-            .index = @intCast(event_system.ActionIndex, @enumToInt(audio.AudioEvent.started)),
         };
 
         _ = event_system.internalEventsBind(.{ .origin = origin_event, .target = target_event });
@@ -1542,6 +1543,20 @@ fn update(allocator: Allocator, app: *GraphicsContext) !void {
             playlist_directory_name,
             draw_region,
         );
+
+        const origin_event = event_system.SubsystemEventIndex{
+            .subsystem = audio.subsystem_index,
+            .index = @intCast(event_system.EventIndex, @enumToInt(audio.AudioEvent.finished)),
+        };
+
+        // Add an action handler that will start the progress bar callback
+        // when audio starts playing
+        const target_event = event_system.SubsystemActionIndex{
+            .subsystem = Playlist.subsystem_index,
+            .index = Playlist.doNextTrackPlay(),
+        };
+
+        _ = event_system.internalEventsBind(.{ .origin = origin_event, .target = target_event });
     }
 
     vertex_buffer_count = face_writer.used;
@@ -1588,6 +1603,9 @@ fn appLoop(allocator: Allocator, app: *GraphicsContext) !void {
         for (audio.output_event_buffer.collect()) |event| {
             if (event == .finished) {
                 event_system.resetActiveTimeIntervalEvents();
+                Playlist.trackNext() catch |err| {
+                    std.log.warn("Error playing next track in playlist -> {s}", .{err});
+                };
             }
         }
 
@@ -1649,7 +1667,7 @@ fn appLoop(allocator: Allocator, app: *GraphicsContext) !void {
         const frame_end_ms: i64 = std.time.milliTimestamp();
         const frame_duration_ms = frame_end_ms - frame_start_ms;
 
-        event_system.handleTimeEvents(frame_start_ms);
+        event_system.handleTimeEvents(frame_end_ms);
         // TODO: Call only when required
         is_render_requested = true;
 
