@@ -56,43 +56,6 @@ const Playlist = @import("Playlist.zig");
 // - Calculate # directories to load based on available space
 // - Build libmad into binary
 
-//
-// CONTENTS:
-//
-// - Globals
-// - Memory layout
-// - Core functions
-// - Event handlers
-// - Vulkan functions
-//
-
-//
-// Memory Arena Layout
-//
-// [Static]
-//
-// - Colors
-// - Unscaled layouts
-//
-// [Page]
-//
-// - Directory list
-// - Audio metadata list
-// - Inactive vertices
-// - Vertices ranges
-// - Extent list (Share with layout ?)
-// - Event bindings
-//
-// [Function]
-//
-// - misc
-
-//
-// Page allocated
-//
-// audio buffer
-//
-
 var is_render_requested: bool = true;
 var is_draw_required: bool = true;
 
@@ -1420,77 +1383,6 @@ fn swapTexture(app: *GraphicsContext) !void {
     }
 }
 
-fn handleAudioPlay(allocator: Allocator, action_payload: action.PayloadAudioPlay) !void {
-    if (rewind_points.audio_started != RewindPoints.null_value) {
-        main_arena.rewindTo(rewind_points.audio_started);
-    } else {
-        rewind_points.audio_started = main_arena.used;
-    }
-
-    // TODO: If track is already set, update
-    current_audio_index = action_payload.id;
-    const audio_track_name = audio_files.items[action_payload.id];
-
-    // TODO: Don't hardcode, or put in a definition
-    var current_path_buffer: [128]u8 = undefined;
-    const current_path = try library_navigator.current_directory.realpath(".", current_path_buffer[0..]);
-
-    const paths: [2][]const u8 = .{ current_path, audio_track_name };
-    const full_path = std.fs.path.joinZ(allocator, paths[0..]) catch null;
-    defer allocator.free(full_path.?);
-
-    const kind = library_navigator.loaded_media_items.items[action_payload.id].fileType();
-
-    std.log.info("Playing track {s}", .{library_navigator.loaded_media_items.items[action_payload.id].root()});
-    std.log.info("Playing path {s}", .{full_path});
-
-    switch (kind) {
-        .mp3 => {
-            audio.mp3.playFile(allocator, full_path.?) catch |err| {
-                std.log.err("Failed to play music: {s}", .{err});
-            };
-        },
-        .flac => {
-            audio.flac.playFile(allocator, full_path.?) catch |err| {
-                std.log.err("Failed to play music: {s}", .{err});
-            };
-        },
-        else => {
-            unreachable;
-        },
-    }
-
-    //
-    // If the media icon is set to `resume` (I.e Triangle) we need to update it to `pause`
-    //
-
-    // So the issue is that you need to be able to trigger this action independently of mouse events
-    //
-    // bind(audio_playing, toggle_media_button);
-    // Well, it's a bit messy but you could use a single memory arena for this and just use
-    // { system_id, event_id } => { action_id, memory_offset }
-
-    // if (update_media_icon_action_id_opt) |update_media_icon_action_id| {
-    // handleUpdateVertices(allocator, &action.system_actions.items[update_media_icon_action_id].payload.update_vertices) catch |err| {
-    // log.err("Failed to update vertices for animation: {s}", .{err});
-    // };
-    // }
-
-    std.debug.assert(media_button_toggle_audio_action_id != update_media_icon_action_id_opt.?);
-
-    // Set the media icon button to update when clicked
-    if (update_media_icon_action_id_opt) |update_media_icon_action_id| {
-        std.log.info("Set action to update_vertices", .{});
-        action.system_actions.items[update_media_icon_action_id].action_type = .update_vertices;
-    }
-
-    std.log.info("Audio play", .{});
-    action.system_actions.items[media_button_toggle_audio_action_id].action_type = .audio_pause;
-
-    // This is for audio duration labels
-    vertex_buffer_count += (10);
-}
-
 // TODO: Rename act
 fn mouseButtonCallback(window: *glfw.Window, button: glfw.MouseButton, act: glfw.Action, mods: glfw.Mods) void {
     _ = action;
@@ -1534,27 +1426,6 @@ fn glfwKeyCallback(window: *glfw.Window, key: i32, scancode: i32, act: i32, mods
     _ = mods;
 }
 
-fn renderCurrentTrackDetails(face_writer: *QuadFaceWriter(GenericVertex)) !void {
-    _ = face_writer;
-    std.debug.assert(audio.output.getState() != .stopped);
-    // if (audio.output.getState() != .stopped) {
-    // const track_name = audio.current_track.title[0..audio.current_track.title_length];
-    // const artist_name = audio.current_track.artist[0..audio.current_track.artist_length];
-
-    // std.log.info("Adding track details: Title: '{s}' Artist '{s}'", .{ track_name, artist_name });
-
-    // {
-    // const placement = geometry.Coordinates2D(ScreenNormalizedBaseType){ .x = -0.95, .y = 0.93 };
-    // _ = try gui.generateText(GenericVertex, face_writer, track_name, placement, scale_factor, glyph_set, theme.track_title_text, null, texture_layer_dimensions);
-    // }
-
-    // {
-    // const placement = geometry.Coordinates2D(ScreenNormalizedBaseType){ .x = -0.95, .y = 0.88 };
-    // _ = try gui.generateText(GenericVertex, face_writer, artist_name, placement, scale_factor, glyph_set, theme.track_artist_text, null, texture_layer_dimensions);
-    // }
-    // }
-}
-
 fn parseFileNameFromPath(path: []const u8) ![]const u8 {
     var i = path.len - 1;
     while (i > 0) : (i -= 1) {
@@ -1584,7 +1455,6 @@ fn update(allocator: Allocator, app: *GraphicsContext) !void {
     navigation.reset();
     audio.reset();
     event_system.resetBindings();
-    // event_system.resetBindings();
 
     var face_writer = quad_face_writer_pool.create(0, vertices_range_size / @sizeOf(GenericVertex));
 
@@ -1617,47 +1487,7 @@ fn update(allocator: Allocator, app: *GraphicsContext) !void {
     {
         const play_button = try ui.playlist_buttons.toggle.draw(&face_writer, scale_factor, theme);
         _ = play_button;
-
-        // const on_click_1 = event_system.registerMouseLeftPressAction(play_button.extent);
-        // const on_click_2 = event_system.registerMouseLeftPressAction(play_button.extent);
-
-        // _ = on_click_1;
-        // _ = on_click_2;
-
-        // const audio_pause_action = action.Action{
-        // .action_type = .none,
-        // .payload = .{ .audio_pause = .{} },
-        // };
-        // const do_audio_pause = action.system_actions.append(audio_pause_action);
-        // _ = do_audio_pause;
-
-        // _ = play_button;
-        // const on_play_button_hovered = event_system.registerMouseLeftPressAction(play_button.extent);
-        // const do_toggle_play_button = play_button.doToggle();
-        // const do_pause_audio = audio.actions.pause();
-
-        // event_system.connect(on_play_button_hovered, do_toggle_play_button);
-        // event_system.connect(on_play_button_hovered, do_pause_audio);
     }
-
-    // media_button_toggle_audio_action_id = (update_media_icon_action_id_opt.? + 1);
-
-    // {
-    // const track_length_seconds: u32 = audio.output.trackLengthSeconds() catch 1;
-    // const track_played_seconds: u32 = audio.output.secondsPlayed() catch 0;
-    // const progress_percentage: f32 = @intToFloat(f32, track_played_seconds) / @intToFloat(f32, track_length_seconds);
-
-    // audio_progress_bar_faces_quad_index = try ui.progress_bar.foreground.draw(&face_writer, progress_percentage, scale_factor, theme);
-    // }
-
-    // if (audio.output.getState() != .stopped) {
-    // try renderCurrentTrackDetails(&face_writer, scale_factor);
-    // }
-
-    // try ui.directory_up_button.draw(&face_writer, glyph_set, scale_factor, theme);
-
-    // const is_tracks = library_navigator.containsAudio();
-    // std.log.info("Contains audio: {s}", .{is_tracks});
 
     if (navigation.contents.count > 1 and screen_dimensions.width >= 300) {
         var slice_buffer: [64][]const u8 = undefined;
@@ -1714,21 +1544,6 @@ fn update(allocator: Allocator, app: *GraphicsContext) !void {
         );
     }
 
-    //
-    // Duration of audio played
-    //
-
-    // {
-    // //
-    // // Track Duration Label
-    // //
-
-    // if (audio.output.getState() != .stopped) {
-    // try generateDurationLabels(&face_writer, scale_factor);
-    // }
-    // }
-
-    // audio_progress_label_faces_quad_index = face_writer.used;
     vertex_buffer_count = face_writer.used;
 
     is_draw_required = false;
@@ -1739,266 +1554,11 @@ fn update(allocator: Allocator, app: *GraphicsContext) !void {
     event_system.mouse_event_writer.print();
 }
 
-// fn generateDurationLabels(face_writer: *QuadFaceWriter(GenericVertex), scale_factor: geometry.ScaleFactor2D(f32)) !void {
-// const quads_required_count: u32 = 10;
-// assert(face_writer.remaining() >= quads_required_count);
-
-// //
-// // Track Duration Label
-// //
-
-// const progress_bar_width: f32 = 1.0;
-// const progress_bar_margin: f32 = (2.0 - progress_bar_width) / 2.0;
-// const progress_bar_extent = geometry.Extent2D(ScreenNormalizedBaseType){
-// .x = -1.0 + progress_bar_margin,
-// .y = 0.865,
-// .width = progress_bar_width,
-// .height = 8 * scale_factor.vertical,
-// };
-
-// const track_duration_total = secondsToAudioDurationTime(@intCast(u16, try audio.output.trackLengthSeconds()));
-// const track_duration_played = secondsToAudioDurationTime(@intCast(u16, try audio.output.secondsPlayed()));
-// const text_color = RGBA(f32){ .r = 0.8, .g = 0.8, .b = 0.8, .a = 1.0 };
-// const margin_from_progress_bar: f32 = 0.03;
-// var buffer: [5]u8 = undefined;
-
-// //
-// // Duration Total
-// //
-
-// // audio_progress_label_faces_quad_index = face_writer.used;
-
-// const duration_total_label = try std.fmt.bufPrint(&buffer, "{d:0>2}:{d:0>2}", .{ track_duration_total.minutes, track_duration_total.seconds });
-// const duration_total_label_placement = geometry.Coordinates2D(ScreenNormalizedBaseType){
-// .x = progress_bar_extent.x + progress_bar_extent.width + margin_from_progress_bar,
-// .y = progress_bar_extent.y + (progress_bar_extent.height / 2.0),
-// };
-
-// const duration_total_label_faces = try gui.generateText(
-// GenericVertex,
-// face_writer,
-// duration_total_label,
-// duration_total_label_placement,
-// scale_factor,
-// glyph_set,
-// text_color,
-// null,
-// );
-
-// assert(duration_total_label_faces.len == 5);
-
-// //
-// // Duration Played
-// //
-
-// const duration_played_label = try std.fmt.bufPrint(
-// &buffer,
-// "{d:0>2}:{d:0>2}",
-// .{ track_duration_played.minutes, track_duration_played.seconds },
-// );
-// const duration_played_label_placement = geometry.Coordinates2D(ScreenNormalizedBaseType){
-// .x = progress_bar_extent.x - margin_from_progress_bar - 0.09,
-// .y = progress_bar_extent.y + (progress_bar_extent.height / 2.0),
-// };
-
-// const duration_played_label_faces = try gui.generateText(
-// GenericVertex,
-// face_writer,
-// duration_played_label,
-// duration_played_label_placement,
-// scale_factor,
-// glyph_set,
-// text_color,
-// null,
-// );
-
-// is_render_requested = true;
-// assert(duration_played_label_faces.len == 5);
-// }
-
-fn generateAudioProgressBar(
-    face_writer: *QuadFaceWriter(GenericVertex),
-    progress: f32,
-    color: RGBA(f32),
-    extent: geometry.Extent2D(ScreenNormalizedBaseType),
-) ![]QuadFace(GenericVertex) {
-    std.debug.assert(progress >= 0.0 and progress <= 1.0);
-    const progress_extent = geometry.Extent2D(ScreenNormalizedBaseType){
-        .x = extent.x,
-        .y = extent.y,
-        .width = extent.width * progress,
-        .height = extent.height,
-    };
-
-    var faces = try face_writer.allocate(1);
-    faces[0] = graphics.generateQuadColored(GenericVertex, progress_extent, color);
-    return faces;
-}
-
-fn secondsToAudioDurationTime(seconds: u16) AudioDurationTime {
-    var current_seconds: u16 = seconds;
-    const current_minutes = blk: {
-        var minutes: u16 = 0;
-        while (current_seconds >= 60) {
-            minutes += 1;
-            current_seconds -= 60;
-        }
-        break :blk minutes;
-    };
-
-    return .{
-        .seconds = current_seconds,
-        .minutes = current_minutes,
-    };
-}
-
-// fn updateAudioDurationLabel(current_point_seconds: u32, track_duration_seconds: u32, vertices: []GenericVertex) !void {
-// // Wrap our fixed-size buffer in allocator interface to be generic
-
-// var face_writer = quad_face_writer_pool.create(vertices,
-
-// var fixed_buffer_allocator = FixedBufferAllocator.init(@ptrCast([*]u8, vertices), vertices_range_size);
-// var face_allocator = fixed_buffer_allocator.allocator();
-
-// assert(current_point_seconds <= (1 << 16));
-
-// const track_duration_total = secondsToAudioDurationTime(@intCast(u16, track_duration_seconds));
-// const track_duration_played = secondsToAudioDurationTime(@intCast(u16, current_point_seconds));
-
-// const scale_factor = geometry.ScaleFactor2D(f32){
-// .horizontal = (2.0 / @intToFloat(f32, screen_dimensions.width)),
-// .vertical = (2.0 / @intToFloat(f32, screen_dimensions.height)),
-// };
-
-// var buffer: [13]u8 = undefined;
-// const audio_progress_label_text = try std.fmt.bufPrint(&buffer, "{d:0>2}:{d:0>2} / {d:0>2}:{d:0>2}", .{ track_duration_played.minutes, track_duration_played.seconds, track_duration_total.minutes, track_duration_total.seconds });
-// const audio_progress_label_placement = geometry.Coordinates2D(ScreenNormalizedBaseType){ .x = -0.9, .y = 0.9 };
-// const audio_progress_text_color = RGBA(f32){ .r = 0.8, .g = 0.8, .b = 0.8, .a = 1.0 };
-
-// _ = try gui.generateText(GenericVertex, face_allocator, audio_progress_label_text, audio_progress_label_placement, scale_factor, glyph_set, audio_progress_text_color, null, texture_layer_dimensions);
-
-// is_render_requested = true;
-// }
-
-fn handleAudioFinished() void {
-    const allocator = std.heap.c_allocator;
-
-    current_audio_index += 1;
-    if (current_audio_index >= audio_files.count) {
-        return;
-    }
-
-    const audio_track_name = audio_files.items[current_audio_index];
-
-    // TODO: Don't hardcode, or put in a definition
-    var current_path_buffer: [128]u8 = undefined;
-    const current_path = library_navigator.current_directory.realpath(".", current_path_buffer[0..]) catch |err| {
-        std.log.err("Failed to create std.fs.Dir of current path : {s}", .{err});
-        return;
-    };
-
-    const paths: [2][]const u8 = .{ current_path, audio_track_name };
-    const full_path = std.fs.path.joinZ(allocator, paths[0..]) catch null;
-    defer allocator.free(full_path.?);
-
-    const kind = library_navigator.loaded_media_items.items[current_audio_index].fileType();
-
-    std.log.info("Playing track {s}", .{library_navigator.loaded_media_items.items[current_audio_index].root()});
-    std.log.info("Playing path {s}", .{full_path});
-
-    switch (kind) {
-        .mp3 => {
-            audio.mp3.playFile(allocator, full_path.?) catch |err| {
-                std.log.err("Failed to play music: {s}", .{err});
-            };
-        },
-        .flac => {
-            audio.flac.playFile(allocator, full_path.?) catch |err| {
-                std.log.err("Failed to play music: {s}", .{err});
-            };
-        },
-        else => {
-            std.log.err("Invalid kind '{s}' for track #{d} '{s}'", .{ kind, current_audio_index, library_navigator.loaded_media_items.items[current_audio_index].fileName() });
-            unreachable;
-        },
-    }
-
-    // TODO:
-    // const title_length = track_metadatas.items[current_audio_index - 1].title_length;
-    // const artist_length = track_metadatas.items[current_audio_index - 1].artist_length;
-
-    // vertex_buffer_count -= (10 + title_length + artist_length);
-}
-
-// fn handleAudioStopped() void {
-// log.info("Audio stopped event triggered", .{});
-// const progress_percentage: f32 = 0.0;
-// var face_writer = quad_face_writer_pool.create(audio_progress_bar_faces_quad_index, 1);
-// const scale_factor = geometry.ScaleFactor2D(f32){
-// .horizontal = (2.0 / @intToFloat(f32, screen_dimensions.width)),
-// .vertical = (2.0 / @intToFloat(f32, screen_dimensions.height)),
-// };
-
-// const width: f32 = 1.0;
-// const margin: f32 = (2.0 - width) / 2.0;
-
-// const inner_margin_horizontal: f32 = 0.005;
-// const inner_margin_vertical: f32 = 1 * scale_factor.vertical;
-
-// const extent = geometry.Extent2D(ScreenNormalizedBaseType){
-// .x = -1.0 + margin + inner_margin_horizontal,
-// .y = 0.87 - inner_margin_vertical,
-// .width = (width - (inner_margin_horizontal * 2.0)),
-// .height = 6 * scale_factor.vertical,
-// };
-
-// const color = RGBA(f32).fromInt(u8, 150, 50, 80, 255);
-// _ = generateAudioProgressBar(&face_writer, progress_percentage, color, extent) catch |err| {
-// log.warn("Failed to draw audio progress bar : {s}", .{err});
-// return;
-// };
-
-// vertex_buffer_count -= (5 * 2);
-// is_render_requested = true;
-// }
-
-fn handleAudioStarted() void {
-    // const max_title_length: u8 = 16;
-    // const max_artist_length: u8 = 16;
-    // const charactor_count: u16 = 10;
-    // const maximum_quad_count: u16 = charactor_count + max_artist_length + max_title_length;
-
-    // var face_writer = quad_face_writer_pool.create(@intCast(u16, vertex_buffer_count), maximum_quad_count);
-    // std.debug.assert(face_writer.used == 0);
-    // const scale_factor = geometry.ScaleFactor2D(f32){
-    // .horizontal = (2.0 / @intToFloat(f32, screen_dimensions.width)),
-    // .vertical = (2.0 / @intToFloat(f32, screen_dimensions.height)),
-    // };
-
-    // generateDurationLabels(&face_writer, scale_factor) catch |err| {
-    // log.warn("Failed to draw audio duration label : {s}", .{err});
-    // return;
-    // };
-
-    // log.info("Rendering track details", .{});
-    // renderCurrentTrackDetails(&face_writer, scale_factor) catch |err| {
-    // log.warn("Failed to render current track details : {s}", .{err});
-    // return;
-    // };
-
-    // vertex_buffer_count += face_writer.used;
-    // is_render_requested = true;
-}
-
 fn appLoop(allocator: Allocator, app: *GraphicsContext) !void {
     const target_fps = 40;
     const target_ms_per_frame: u32 = 1000 / target_fps;
 
     std.log.info("Target MS / frame: {d}", .{target_ms_per_frame});
-
-    // Timestamp in milliseconds since last update of audio duration label
-    var audio_duration_last_update_ts: i64 = std.time.milliTimestamp();
-    const audio_duration_update_interval_ms: u64 = 1000;
 
     glfw.setCursorPosCallback(app.window, mousePositionCallback);
     glfw.setMouseButtonCallback(app.window, mouseButtonCallback);
@@ -2024,27 +1584,6 @@ fn appLoop(allocator: Allocator, app: *GraphicsContext) !void {
 
             scale_factor = ScreenScaleFactor.create(screen_dimensions);
         }
-
-        // scale_factor = geometry.ScaleFactor2D(f32){
-        // .horizontal = (2.0 / @intToFloat(f32, screen_dimensions.width)),
-        // .vertical = (2.0 / @intToFloat(f32, screen_dimensions.height)),
-        // };
-
-        // if (!audio.output_event_buffer.empty()) {
-        // for (audio.output_event_buffer.collect()) |event| {
-        // switch (event) {
-        // .stopped => handleAudioStopped(),
-        // .finished => handleAudioFinished(),
-        // .started => handleAudioStarted(),
-        // .duration_calculated => {
-        // // log.info("Track duration seconds: {d}", .{audio.mp3.track_length});
-        // },
-        // else => {
-        // log.warn("Unhandled default audio event -> {s}", .{event});
-        // },
-        // }
-        // }
-        // }
 
         for (audio.output_event_buffer.collect()) |event| {
             if (event == .finished) {
@@ -2120,55 +1659,6 @@ fn appLoop(allocator: Allocator, app: *GraphicsContext) !void {
 
         if (frame_duration_ms >= target_ms_per_frame) {
             continue;
-        }
-
-        // Replace this with audio events to save loading each frame
-        const is_playing = audio.output.getState() == .playing;
-
-        // Each second update the audio duration
-        if (is_playing and frame_start_ms >= (audio_duration_last_update_ts + audio_duration_update_interval_ms)) {
-            // const track_length_seconds: u32 = audio.output.trackLengthSeconds() catch 0;
-            // const track_played_seconds: u32 = audio.output.secondsPlayed() catch 0;
-
-            // {
-            // const vertices_begin_index: usize = audio_progress_label_faces_quad_index * 4;
-            // try updateAudioDurationLabel(track_played_seconds, track_length_seconds, vertices[vertices_begin_index .. vertices_begin_index + (11 * 4)]);
-            // audio_duration_last_update_ts = frame_start_ms;
-            // }
-
-            //
-            // Update progress bar too
-            //
-
-            // {
-            // const progress_percentage: f32 = @intToFloat(f32, track_played_seconds) / @intToFloat(f32, track_length_seconds);
-            // if (progress_percentage > 0.0 and progress_percentage <= 1.0) {
-            // const width: f32 = 1.0;
-            // const margin: f32 = (2.0 - width) / 2.0;
-
-            // const inner_margin_horizontal = 4 * scale_factor.horizontal;
-            // const inner_margin_vertical = 1 * scale_factor.vertical;
-
-            // const extent = geometry.Extent2D(ScreenNormalizedBaseType){
-            // .x = -1.0 + margin + inner_margin_horizontal,
-            // .y = 0.87 - inner_margin_vertical,
-            // .width = (width - (inner_margin_horizontal * 2.0)),
-            // .height = 6 * scale_factor.vertical,
-            // };
-
-            // const color = RGBA(f32).fromInt(u8, 150, 50, 80, 255);
-            // var face_writer = quad_face_writer_pool.create(audio_progress_bar_faces_quad_index, 1);
-
-            // _ = try generateAudioProgressBar(&face_writer, progress_percentage, color, extent);
-            // }
-
-            // {
-            // std.debug.assert(audio_progress_label_faces_quad_index != 0);
-            // var face_writer = quad_face_writer_pool.create(audio_progress_label_faces_quad_index, 10);
-            // try generateDurationLabels(&face_writer, scale_factor);
-            // }
-            // is_render_requested = true;
-            // }
         }
 
         std.debug.assert(target_ms_per_frame > frame_duration_ms);
