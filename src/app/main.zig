@@ -41,6 +41,21 @@ const AbsolutePath = storage.AbsolutePath;
 const String = storage.String;
 const Playlist = @import("Playlist.zig");
 
+// TODO
+//
+// - Reset progress bar after track finishes
+// - Reclick on directory item doesn't reload anything
+// - Don't reload track duration if available
+// - Indicator of track playing
+// - Show track details on side
+// - How time markers beside progress bar
+// - Next and previous buttons
+// - Update example library to have albums
+// - Next track will automatically play
+// - Get flac to work again
+// - Calculate # directories to load based on available space
+// - Build libmad into binary
+
 //
 // CONTENTS:
 //
@@ -1540,6 +1555,18 @@ fn renderCurrentTrackDetails(face_writer: *QuadFaceWriter(GenericVertex)) !void 
     // }
 }
 
+fn parseFileNameFromPath(path: []const u8) ![]const u8 {
+    var i = path.len - 1;
+    while (i > 0) : (i -= 1) {
+        if (path[i] == '/') {
+            return path[i + 1 ..];
+        }
+    }
+
+    std.log.err("Failed to parse file name from path '{s}'", .{path});
+    return error.PathFormatError;
+}
+
 fn update(allocator: Allocator, app: *GraphicsContext) !void {
     event_system.mouse_event_writer.reset();
 
@@ -1556,6 +1583,7 @@ fn update(allocator: Allocator, app: *GraphicsContext) !void {
     ui.reset();
     navigation.reset();
     audio.reset();
+    event_system.resetBindings();
     // event_system.resetBindings();
 
     var face_writer = quad_face_writer_pool.create(0, vertices_range_size / @sizeOf(GenericVertex));
@@ -1661,23 +1689,29 @@ fn update(allocator: Allocator, app: *GraphicsContext) !void {
             directory_screen_space,
             .top_left,
         );
+    }
 
-        if (navigation.playlist_path_opt != null) {
-            const draw_region = geometry.Extent2D(ScreenPixelBaseType){
-                .x = screen_dimensions.width - 600,
-                .y = 103,
-                .width = 600,
-                .height = 800,
-            };
-            try ui.track_view.draw(
-                &face_writer,
-                Playlist.storage,
-                glyph_set,
-                scale_factor,
-                theme,
-                draw_region,
-            );
-        }
+    if (navigation.playlist_path_opt) |playlist_path| {
+        const draw_region = geometry.Extent2D(ScreenPixelBaseType){
+            .x = screen_dimensions.width - 400,
+            .y = 103,
+            .width = 400,
+            .height = 800,
+        };
+
+        var playlist_path_buffer: [256]u8 = undefined;
+        const playlist_path_string = try playlist_path.realpath(".", playlist_path_buffer[0..]);
+
+        const playlist_directory_name = parseFileNameFromPath(playlist_path_string) catch "Unknown";
+        try ui.track_view.draw(
+            &face_writer,
+            Playlist.storage,
+            glyph_set,
+            scale_factor,
+            theme,
+            playlist_directory_name,
+            draw_region,
+        );
     }
 
     //
@@ -1957,7 +1991,7 @@ fn handleAudioStarted() void {
 }
 
 fn appLoop(allocator: Allocator, app: *GraphicsContext) !void {
-    const target_fps = 30;
+    const target_fps = 40;
     const target_ms_per_frame: u32 = 1000 / target_fps;
 
     std.log.info("Target MS / frame: {d}", .{target_ms_per_frame});
@@ -1968,6 +2002,8 @@ fn appLoop(allocator: Allocator, app: *GraphicsContext) !void {
 
     glfw.setCursorPosCallback(app.window, mousePositionCallback);
     glfw.setMouseButtonCallback(app.window, mouseButtonCallback);
+
+    scale_factor = ScreenScaleFactor.create(screen_dimensions);
 
     while (!glfw.shouldClose(app.window)) {
         glfw.pollEvents();
@@ -1985,9 +2021,9 @@ fn appLoop(allocator: Allocator, app: *GraphicsContext) !void {
             framebuffer_resized = true;
             screen_dimensions.width = screen.width;
             screen_dimensions.height = screen.height;
-        }
 
-        scale_factor = ScreenScaleFactor.create(screen_dimensions);
+            scale_factor = ScreenScaleFactor.create(screen_dimensions);
+        }
 
         // scale_factor = geometry.ScaleFactor2D(f32){
         // .horizontal = (2.0 / @intToFloat(f32, screen_dimensions.width)),
@@ -2009,6 +2045,12 @@ fn appLoop(allocator: Allocator, app: *GraphicsContext) !void {
         // }
         // }
         // }
+
+        for (audio.output_event_buffer.collect()) |event| {
+            if (event == .finished) {
+                event_system.resetActiveTimeIntervalEvents();
+            }
+        }
 
         for (gui.message_queue.collect()) |message| {
             if (message == .vertices_modified) {

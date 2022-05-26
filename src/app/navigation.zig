@@ -13,9 +13,9 @@ const DirectoryContents = struct {
     count: u16 = 0,
     size: u16 = 0,
 
-    /// Adds a new path / file 
-    /// The first entry is treated as the directory path, 
-    /// while the following are interpreted as files within that directory 
+    /// Adds a new path / file
+    /// The first entry is treated as the directory path,
+    /// while the following are interpreted as files within that directory
     // NOTE: parent path should include final '/'
     pub fn add(self: *@This(), arena: *memory.LinearArena, name: []const u8) void {
         std.log.info("Adding: {s}", .{name});
@@ -37,8 +37,8 @@ const DirectoryContents = struct {
 
     /// Returns the path of the parent directory
     pub fn parent(self: @This()) []const u8 {
-        const base = @ptrCast([*]const u8, @ptrToInt(self) + @sizeOf(@This()));
-        const length = base;
+        const base = @intToPtr([*]const u8, @ptrToInt(&self) + @sizeOf(@This()));
+        const length: usize = @intCast(usize, base[0]);
         return base[1 .. 1 + length];
     }
 

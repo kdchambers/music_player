@@ -265,10 +265,14 @@ pub const track_view = struct {
         glyph_set: GlyphSet,
         scale_factor: ScreenScaleFactor,
         theme: Theme,
+        title: []const u8,
         draw_region: geometry.Extent2D(ScreenPixelBaseType),
     ) !void {
         std.debug.assert(draw_region.width >= 200);
         std.debug.assert(draw_region.height >= 200);
+
+        const top_margin_pixels: u16 = 50;
+        const top_margin = scale_factor.convertLength(.pixel, .ndc_right, .vertical, top_margin_pixels);
 
         const button_margin_pixels: u16 = 10;
         const button_margin = scale_factor.convertLength(.pixel, .ndc_right, .horizontal, button_margin_pixels);
@@ -307,7 +311,7 @@ pub const track_view = struct {
 
             const track_item_extent = geometry.Extent2D(ScreenNormalizedBaseType){
                 .x = top_left_normalized.x + button_margin,
-                .y = top_left_normalized.y + (@intToFloat(f32, track_index) * (30 * scale_factor.vertical)),
+                .y = top_left_normalized.y + top_margin + (@intToFloat(f32, track_index) * (30 * scale_factor.vertical)),
                 .width = label_width,
                 .height = 30 * scale_factor.vertical,
             };
@@ -347,7 +351,7 @@ pub const track_view = struct {
             const duration_label_extent = try gui.calculateRenderedTextDimensions(duration_label, glyph_set, scale_factor, 0.1, 0);
             const duration_label_placement = geometry.Coordinates2D(ScreenNormalizedBaseType){
                 .x = top_left_normalized.x + label_width - duration_label_extent.width,
-                .y = top_left_normalized.y + 0.0425 + (@intToFloat(f32, track_index) * (30 * scale_factor.vertical)),
+                .y = top_left_normalized.y + 0.0425 + top_margin + (@intToFloat(f32, track_index) * (30 * scale_factor.vertical)),
             };
 
             _ = try gui.generateText(
@@ -397,6 +401,25 @@ pub const track_view = struct {
             // std.debug.assert(track_item_on_hover_event_ids[0] == action.system_actions.append(track_item_update_color_enter_action));
             // std.debug.assert(track_item_on_hover_event_ids[1] == action.system_actions.append(track_item_update_color_exit_action));
         }
+
+        std.log.info("Track view title: {s}", .{title});
+
+        const title_placement = scale_factor.convertPoint(
+            .pixel,
+            .ndc_right,
+            .{ .x = draw_region.x + 10, .y = draw_region.y + 30 },
+        );
+
+        _ = try gui.generateText(
+            GenericVertex,
+            face_writer,
+            title,
+            title_placement,
+            scale_factor,
+            glyph_set,
+            theme.track_text,
+            null,
+        );
     }
 };
 
@@ -491,6 +514,11 @@ pub const directory_view = struct {
                 .width = item_width,
                 .height = item_height,
             };
+
+            if (media_item_extent.y + media_item_extent.height > (max_extent.y + max_extent.height)) {
+                std.log.warn("Directory view item outside of render extent. Skipping", .{});
+                continue;
+            }
 
             action_config.on_click_left_action_list[0] = event_system.SubsystemActionIndex{
                 .index = @intCast(event_system.ActionIndex, do_select_directory.base_action_index + directory_name_i),
@@ -676,19 +704,26 @@ pub const progress_bar = struct {
         });
     }
 
+    const progress_bar_width_pixels: u32 = 600;
+    const progress_bar_height_pixels: u32 = 6;
+
     const background = struct {
         pub fn draw(
             face_quad: *graphics.QuadFace(GenericVertex),
             scale_factor: ScreenScaleFactor,
             color: graphics.RGBA(f32),
         ) void {
-            const progress_bar_width: f32 = 1.0;
+            const progress_bar_width: f32 = scale_factor.convertLength(.pixel, .ndc_right, .horizontal, progress_bar_width_pixels);
             const progress_bar_margin: f32 = (2.0 - progress_bar_width) / 2.0;
+            const progress_bar_height = scale_factor.convertLength(.pixel, .ndc_right, .vertical, progress_bar_height_pixels);
+
+            std.debug.assert(progress_bar_width + (progress_bar_margin * 2) == 2.0);
+
             const progress_bar_extent = geometry.Extent2D(ScreenNormalizedBaseType){
                 .x = -1.0 + progress_bar_margin,
                 .y = 0.87,
                 .width = progress_bar_width,
-                .height = 6 * scale_factor.vertical,
+                .height = progress_bar_height,
             };
             face_quad.* = graphics.generateQuadColored(GenericVertex, progress_bar_extent, color, .bottom_left);
         }
@@ -701,17 +736,17 @@ pub const progress_bar = struct {
             scale_factor: ScreenScaleFactor,
             color: graphics.RGBA(f32),
         ) void {
-            const width: f32 = 1.0;
-            const margin: f32 = (2.0 - width) / 2.0;
-
-            const inner_margin_horizontal: f32 = 0.005;
-            const inner_margin_vertical: f32 = 1 * scale_factor.vertical;
+            const progress_bar_width: f32 = scale_factor.convertLength(.pixel, .ndc_right, .horizontal, progress_bar_width_pixels - 4);
+            const progress_bar_margin: f32 = (2.0 - progress_bar_width) / 2.0;
+            const vertical_margin_pixels: u32 = 1;
+            const vertical_margin = scale_factor.convertLength(.pixel, .ndc_right, .vertical, vertical_margin_pixels);
+            const progress_bar_height = scale_factor.convertLength(.pixel, .ndc_right, .vertical, progress_bar_height_pixels - (vertical_margin_pixels * 2));
 
             const extent = geometry.Extent2D(ScreenNormalizedBaseType){
-                .x = -1.0 + margin + inner_margin_horizontal,
-                .y = 0.87 - inner_margin_vertical,
-                .width = width - (inner_margin_horizontal * 2.0),
-                .height = 4 * scale_factor.vertical,
+                .x = -1.0 + progress_bar_margin,
+                .y = 0.87 - vertical_margin,
+                .width = progress_bar_width,
+                .height = progress_bar_height,
             };
 
             std.debug.assert(progress_percentage >= 0.0);

@@ -775,6 +775,7 @@ pub const mp3 = struct {
         var decoder: mad.mad_decoder = undefined;
         // Initial decode to read headers and calculate length
         output.audio_length = 0;
+        output.audio_duration = 0;
         const get_track_length_start_ts: i64 = std.time.milliTimestamp();
 
         mad.mad_decoder_init(&decoder, @ptrCast(*anyopaque, input_buffer), inputCallback, headerCallback, null, null, errorCallback, null);
@@ -782,7 +783,7 @@ pub const mp3 = struct {
         _ = mad.mad_decoder_finish(&decoder);
 
         // TODO: Don't hardcode these values
-        output.audio_length = @floatToInt(u32, output.audio_duration) * 2 * 2 * 44100;
+        output.audio_length = @floatToInt(u32, output.audio_duration * 2.0 * 2.0 * 44100.0);
 
         std.log.info("Audio duration: {d}", .{output.audio_duration});
         std.log.info("Audio length: {d}", .{output.audio_length});
@@ -810,6 +811,10 @@ pub const mp3 = struct {
         mad.mad_decoder_init(&decoder, @ptrCast(*anyopaque, input_buffer), inputCallback, null, null, outputCallback, errorCallback, null);
         _ = mad.mad_decoder_run(&decoder, mad.MAD_DECODER_MODE_SYNC);
         _ = mad.mad_decoder_finish(&decoder);
+
+        output.audio_duration = 0;
+        output.audio_index = 0;
+        output.audio_length = 0;
 
         output_event_buffer.add(.finished) catch |err| {
             std.log.err("Failed to add output Audio event : {s}", .{err});

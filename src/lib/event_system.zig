@@ -24,9 +24,15 @@ pub const InternalEventBinding = struct {
     target: SubsystemActionIndex,
 };
 
+pub fn resetActiveTimeIntervalEvents() void {
+    for (registered_time_interval_events.toSliceMutable()) |*event| {
+        event.start_timestamp_ms = 0;
+    }
+}
+
 pub fn resetBindings() void {
-    internal_event_bindings.clear();
     registered_time_interval_events.clear();
+    internal_event_bindings.clear();
 }
 
 var internal_event_bindings: memory.FixedBuffer(InternalEventBinding, 20) = .{};
@@ -36,7 +42,6 @@ pub fn internalEventsBind(binding: InternalEventBinding) u16 {
 }
 
 pub fn internalEventHandle(origin: SubsystemActionIndex) void {
-    // std.debug.assert(false);
     if (internal_event_bindings.count == 0) {
         std.log.warn("No internal events loaded to invoke", .{});
         return;
@@ -91,18 +96,24 @@ pub fn timeIntervalEventBegin(entry_id: u16) void {
 }
 
 pub fn handleTimeEvents(timestamp_ms: i64) void {
+    const active_handlers_count = registered_time_interval_events.count;
+    std.debug.assert(active_handlers_count == 0 or active_handlers_count == 1);
+
     for (registered_time_interval_events.toSliceMutable()) |*event_entry| {
         if (event_entry.start_timestamp_ms == 0) {
             continue;
         }
         std.debug.assert(timestamp_ms >= event_entry.last_called_timestamp_ms);
-        const since_last_call = timestamp_ms - event_entry.last_called_timestamp_ms;
-        if (since_last_call >= event_entry.interval_milliseconds) {
-            std.log.info("Time interval event triggered", .{});
+        var since_last_call = timestamp_ms - event_entry.last_called_timestamp_ms;
+        var i: u32 = 0;
+        while (since_last_call >= event_entry.interval_milliseconds) : (i += 1) {
+            std.log.info("Time interval event triggered {d}", .{i});
             // Recalculate last_called_timestamp_ms to be a multiple of interval_milliseconds
             // to avoid time drift
             event_entry.invocation_count += 1;
             event_entry.last_called_timestamp_ms = event_entry.start_timestamp_ms + (event_entry.interval_milliseconds * event_entry.invocation_count);
+            since_last_call = timestamp_ms - event_entry.last_called_timestamp_ms;
+
             event_entry.callback.*();
         }
     }
