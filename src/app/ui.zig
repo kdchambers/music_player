@@ -28,12 +28,6 @@ const ui = @This();
 
 pub var subsystem_index: event_system.SubsystemIndex = undefined;
 
-pub const Widget = struct {
-    face_index: u16,
-    face_count: u16,
-    extent: geometry.Extent2D(ScreenNormalizedBaseType),
-};
-
 pub const ActionChangeColor = struct {
     color_index: u8,
     face_count: u8,
@@ -48,13 +42,13 @@ const Action = enum(u8) {
 };
 
 var action_list: memory.FixedBuffer(Action, 20) = .{};
+const parent_directory_id = std.math.maxInt(u16);
 
 pub fn doStartProgressBar() event_system.ActionIndex {
     return @intCast(event_system.ActionIndex, action_list.append(.progress_bar_start));
 }
 
 pub fn doAction(index: event_system.ActionIndex) void {
-    std.log.info("ui.doAction called", .{});
     const act = action_list.items[index];
     switch (act) {
         .progress_bar_start => progress_bar.start(),
@@ -76,8 +70,7 @@ pub const playlist_buttons = struct {
             face_writer: *QuadFaceWriter(GenericVertex),
             scale_factor: ScreenScaleFactor,
             theme: Theme,
-        ) !Widget {
-            const start_face_index = face_writer.used;
+        ) !void {
             const media_button_placement = geometry.Coordinates2D(ScreenNormalizedBaseType){
                 .x = 0.0 - (10 * scale_factor.horizontal),
                 .y = 0.935,
@@ -87,10 +80,6 @@ pub const playlist_buttons = struct {
                 .width = 20 * scale_factor.horizontal,
                 .height = 20 * scale_factor.vertical,
             };
-            // const media_button_resumed_dimensions = geometry.Dimensions2D(ScreenNormalizedBaseType){
-            // .width = 4 * scale_factor.horizontal,
-            // .height = 15 * scale_factor.vertical,
-            // };
 
             const media_button_paused_extent = geometry.Extent2D(ScreenNormalizedBaseType){
                 .x = media_button_placement.x,
@@ -99,84 +88,12 @@ pub const playlist_buttons = struct {
                 .height = media_button_paused_dimensions.height,
             };
 
-            // const media_button_resumed_inner_gap: f32 = 6 * scale_factor.horizontal;
-            // const media_button_resumed_width: f32 = media_button_resumed_dimensions.width;
-
-            // const media_button_resumed_left_extent = geometry.Extent2D(ScreenNormalizedBaseType){
-            // .x = media_button_placement.x,
-            // .y = media_button_placement.y,
-            // .width = media_button_resumed_width,
-            // .height = media_button_resumed_dimensions.height,
-            // };
-
-            // const media_button_resumed_right_extent = geometry.Extent2D(ScreenNormalizedBaseType){
-            // .x = media_button_placement.x + media_button_resumed_width + media_button_resumed_inner_gap,
-            // .y = media_button_placement.y,
-            // .width = media_button_resumed_width,
-            // .height = media_button_resumed_dimensions.height,
-            // };
-
-            // var playing_icon_faces: [2]graphics.QuadFace(GenericVertex) = undefined;
-            // playing_icon_faces[0] = graphics.generateQuadColored(GenericVertex, media_button_resumed_left_extent, theme.media_button);
-            // playing_icon_faces[1] = graphics.generateQuadColored(GenericVertex, media_button_resumed_right_extent, theme.media_button);
-
-            // _ = action.inactive_vertices_attachments.append(playing_icon_faces[0]);
-            // _ = action.inactive_vertices_attachments.append(playing_icon_faces[1]);
-
-            // Generate our Media (pause / resume) button
-
-            // const media_button_paused_quad_index = face_writer.used;
-
             // NOTE: Even though we only need one face to generate a triangle,
             // we need to reserve a second for the resumed icon
             var media_button_paused_faces = try face_writer.allocate(2);
 
             media_button_paused_faces[0] = graphics.generateTriangleColoredRight(GenericVertex, media_button_paused_extent, theme.media_button);
             media_button_paused_faces[1] = GenericVertex.nullFace();
-
-            // TODO:
-            // _ = action.system_actions.append(undefined);
-            // return event_system.registerMouseLeftPressAction(media_button_paused_extent);
-
-            // Let's add a second left_click event emitter to change the icon
-            // const media_button_on_left_click_event_id = event_system.registerMouseLeftPressAction(media_button_paused_extent);
-            // _ = media_button_on_left_click_event_id;
-
-            // // Needs to fit into a u10
-            // std.debug.assert(media_button_paused_quad_index <= std.math.pow(u32, 2, 10));
-
-            // const media_button_update_icon_action_payload = action.PayloadVerticesUpdate{
-            // .loaded_vertex_begin = @intCast(u10, media_button_paused_quad_index),
-            // .loaded_vertex_count = 1,
-            // .alternate_vertex_begin = 0,
-            // .alternate_vertex_count = 2, // Number of faces
-            // };
-
-            // // Action type set to .none so that action is disabled initially
-            // const media_button_update_icon_action = action.Action{
-            // .action_type = .none,
-            // .payload = .{ .update_vertices = media_button_update_icon_action_payload },
-            // };
-            // const update_icon_action_id = action.system_actions.append(media_button_update_icon_action);
-            // std.log.info("Update icon action id: {d}", .{update_icon_action_id});
-
-            // // Setup a Pause Action
-
-            // // TODO: Change extent
-            // const media_button_on_left_click_event_id_2 = event_system.registerMouseLeftPressAction(media_button_paused_extent);
-            // const media_button_audio_pause_action_payload = action.PayloadAudioPause{};
-
-            // const media_button_audio_pause_action = action.Action{
-            // .action_type = .none,
-            // .payload = .{ .audio_pause = media_button_audio_pause_action_payload },
-            // };
-            // std.debug.assert(media_button_on_left_click_event_id_2 == action.system_actions.append(media_button_audio_pause_action));
-
-            return Widget{
-                .face_index = start_face_index,
-                .face_count = face_writer.used - start_face_index,
-                .extent = media_button_paused_extent,
-            };
         }
     };
 
@@ -266,8 +183,6 @@ pub const playlist_buttons = struct {
         }
     };
 };
-
-const parent_directory_id = std.math.maxInt(u16);
 
 pub const footer = struct {
     pub fn draw(face_writer: *QuadFaceWriter(GenericVertex), theme: Theme) !void {
@@ -394,45 +309,7 @@ pub const track_view = struct {
                 theme.track_text,
                 null,
             );
-
-            // const track_item_on_left_click_event_id = event_system.registerMouseLeftPressAction(track_item_extent);
-
-            // const track_item_audio_play_action_payload = action.PayloadAudioPlay{
-            // .id = @intCast(u16, track_index),
-            // };
-
-            // const track_item_audio_play_action = action.Action{ .action_type = .audio_play, .payload = .{ .audio_play = track_item_audio_play_action_payload } };
-            // std.debug.assert(track_item_on_left_click_event_id == action.system_actions.append(track_item_audio_play_action));
-
-            // const track_item_on_hover_event_ids = event_system.registerMouseHoverReflexiveEnterAction(track_item_extent);
-
-            // // Index of the quad face (I.e Mulples of 4 faces) within the face allocator
-            // // const track_item_quad_index = calculateQuadIndex(vertices, track_item_faces);
-
-            // const track_item_update_color_vertex_attachment_index = @intCast(u8, action.vertex_range_attachments.append(
-            // .{ .vertex_begin = track_item_quad_index, .vertex_count = gui.button.face_count },
-            // ));
-
-            // const track_item_update_color_enter_action_payload = action.PayloadColorSet{
-            // .vertex_range_begin = track_item_update_color_vertex_attachment_index,
-            // .vertex_range_span = 1,
-            // .color_index = @intCast(u8, track_item_on_hover_color_index),
-            // };
-
-            // const track_item_update_color_exit_action_payload = action.PayloadColorSet{
-            // .vertex_range_begin = track_item_update_color_vertex_attachment_index,
-            // .vertex_range_span = 1,
-            // .color_index = @intCast(u8, track_item_background_color_index),
-            // };
-
-            // const track_item_update_color_enter_action = action.Action{ .action_type = .color_set, .payload = .{ .color_set = track_item_update_color_enter_action_payload } };
-            // const track_item_update_color_exit_action = action.Action{ .action_type = .color_set, .payload = .{ .color_set = track_item_update_color_exit_action_payload } };
-
-            // std.debug.assert(track_item_on_hover_event_ids[0] == action.system_actions.append(track_item_update_color_enter_action));
-            // std.debug.assert(track_item_on_hover_event_ids[1] == action.system_actions.append(track_item_update_color_exit_action));
         }
-
-        std.log.info("Track view title: {s}", .{title});
 
         const title_placement = scale_factor.convertPoint(
             .pixel,

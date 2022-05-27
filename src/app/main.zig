@@ -55,6 +55,7 @@ const Playlist = @import("Playlist.zig");
 // - Get flac to work again
 // - Calculate # directories to load based on available space
 // - Build libmad into binary
+// - Fix memory leak in audio.mp3.playFile
 
 var is_render_requested: bool = true;
 var is_draw_required: bool = true;
@@ -1484,11 +1485,7 @@ fn update(allocator: Allocator, app: *GraphicsContext) !void {
 
     try ui.playlist_buttons.next.draw(&face_writer, scale_factor, theme);
     try ui.playlist_buttons.previous.draw(&face_writer, scale_factor, theme);
-
-    {
-        const play_button = try ui.playlist_buttons.toggle.draw(&face_writer, scale_factor, theme);
-        _ = play_button;
-    }
+    try ui.playlist_buttons.toggle.draw(&face_writer, scale_factor, theme);
 
     if (navigation.contents.count > 1 and screen_dimensions.width >= 300) {
         var slice_buffer: [64][]const u8 = undefined;
