@@ -39,7 +39,7 @@ pub const AudioDurationTime = struct {
 };
 
 pub var output_events: FixedAtomicEventQueue(Event, 20) = .{};
-var current_track_index_opt: ?u16 = 0;
+var current_track_index_opt: ?u16 = null;
 
 pub fn reset() void {
     _ = output_events.collect();
@@ -140,6 +140,7 @@ pub fn trackNext() !void {
         if (new_track_index == storage.entries().len) {
             current_track_index_opt = null;
             try output_events.add(.playlist_finished);
+            std.log.info("Playlist finished", .{});
             return;
         }
 
@@ -150,15 +151,41 @@ pub fn trackNext() !void {
             return;
         };
 
+        try audio.input_event_buffer.add(.stop_requested);
+
         audio.mp3.playFile(std.heap.c_allocator, absolute_path) catch |err| {
             std.log.err("Failed to play track index {d} -> {s}", .{ new_track_index, err });
         };
 
         current_track_index_opt = new_track_index;
+    } else {
+        std.log.warn("Cannot invoke trackNext in inactive playlist", .{});
     }
 }
 
-pub fn trackPrevious() !void {}
+pub fn trackPrevious() !void {
+    if (current_track_index_opt) |current_track_index| {
+        if (current_track_index == 0) {
+            return;
+        }
+
+        const new_track_index: u16 = current_track_index - 1;
+        const absolute_path = storage.entries()[new_track_index].absolutePathZ() catch |err| {
+            std.log.err("Failed to create absolute path for playlist index {d}. Error -> {s}", .{ new_track_index, err });
+            return;
+        };
+
+        try audio.input_event_buffer.add(.stop_requested);
+
+        audio.mp3.playFile(std.heap.c_allocator, absolute_path) catch |err| {
+            std.log.err("Failed to play track index {d} -> {s}", .{ new_track_index, err });
+        };
+
+        current_track_index_opt = new_track_index;
+    } else {
+        std.log.warn("Cannot invoke trackPrevious in inactive playlist", .{});
+    }
+}
 
 pub fn trackPause() !void {}
 

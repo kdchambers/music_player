@@ -92,20 +92,6 @@ var active_thread_handle: std.Thread = undefined;
 var current_audio_buffer: []u8 = undefined;
 var decoded_size: usize = 0;
 
-pub const OutputEvent = enum(u8) {
-    initialized,
-    stopped,
-    finished,
-    started,
-    resumed,
-    paused,
-    volume_up,
-    volume_down,
-    volume_mute,
-    volume_unmute,
-    duration_calculated,
-};
-
 pub const AudioEvent = enum(u8) {
     initialized,
     stopped,
@@ -704,8 +690,8 @@ pub const mp3 = struct {
         while (sample_index < samples_count) : (sample_index += 1) {
             for (input_event_buffer.collect()) |event| {
                 switch (event) {
-                    .stop_requested => {},
-                    .pause_requested => {},
+                    .stop_requested => return mad.MAD_FLOW_STOP,
+                    .pause_requested => output.playback_state = .paused,
                     .audio_source_changed => {
                         //
                     },
@@ -812,13 +798,20 @@ pub const mp3 = struct {
         _ = mad.mad_decoder_run(&decoder, mad.MAD_DECODER_MODE_SYNC);
         _ = mad.mad_decoder_finish(&decoder);
 
+        if (output.audio_index >= output.audio_length) {
+            output_event_buffer.add(.finished) catch |err| {
+                std.log.err("Failed to add .finished Audio event : {s}", .{err});
+            };
+        } else {
+            std.log.info("Emitting .stopped event", .{});
+            output_event_buffer.add(.stopped) catch |err| {
+                std.log.err("Failed to add .stopped Audio event : {s}", .{err});
+            };
+        }
+
         output.audio_duration = 0;
         output.audio_index = 0;
         output.audio_length = 0;
-
-        output_event_buffer.add(.finished) catch |err| {
-            std.log.err("Failed to add output Audio event : {s}", .{err});
-        };
     }
 
     var is_decoded = false;
@@ -903,9 +896,6 @@ pub const mp3 = struct {
         std.log.info("Initializing aolib..", .{});
         try output.init();
         active_thread_handle = try std.Thread.spawn(.{}, decode, .{&current_audio_buffer});
-
-        // TODO
-        // current_track = try extractTrackMetadata(file_path);
     }
 };
 

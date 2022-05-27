@@ -186,6 +186,13 @@ pub const playlist_buttons = struct {
             scale_factor: ScreenScaleFactor,
             theme: Theme,
         ) !void {
+            const combined_extent = geometry.Extent2D(ScreenNormalizedBaseType){
+                .x = 0.0 + scale_factor.convertLength(.pixel, .ndc_right, .horizontal, 35),
+                .y = 0.93,
+                .width = scale_factor.convertLength(.pixel, .ndc_right, .horizontal, 45 + 3),
+                .height = scale_factor.convertLength(.pixel, .ndc_right, .vertical, 12),
+            };
+
             var faces = try face_writer.allocate(2);
             {
                 const extent = geometry.Extent2D(ScreenNormalizedBaseType){
@@ -205,6 +212,14 @@ pub const playlist_buttons = struct {
                 };
                 faces[1] = graphics.generateQuadColored(GenericVertex, extent, theme.media_button, .center);
             }
+
+            var action_writer = event_system.mouse_event_writer.addExtent(combined_extent);
+            const next_track_command = [1]event_system.SubsystemActionIndex{.{
+                .subsystem = Playlist.subsystem_index,
+                .index = Playlist.doNextTrackPlay(),
+            }};
+
+            action_writer.onClickLeft(next_track_command[0..]);
         }
     };
 
@@ -214,6 +229,13 @@ pub const playlist_buttons = struct {
             scale_factor: ScreenScaleFactor,
             theme: Theme,
         ) !void {
+            const combined_extent = geometry.Extent2D(ScreenNormalizedBaseType){
+                .x = 0.0 - scale_factor.convertLength(.pixel, .ndc_right, .horizontal, 50),
+                .y = 0.93,
+                .width = scale_factor.convertLength(.pixel, .ndc_right, .horizontal, 10 + 3 + 6),
+                .height = scale_factor.convertLength(.pixel, .ndc_right, .vertical, 12),
+            };
+
             var faces = try face_writer.allocate(2);
             {
                 const extent = geometry.Extent2D(ScreenNormalizedBaseType){
@@ -233,6 +255,14 @@ pub const playlist_buttons = struct {
                 };
                 faces[1] = graphics.generateQuadColored(GenericVertex, extent, theme.media_button, .center);
             }
+
+            var action_writer = event_system.mouse_event_writer.addExtent(combined_extent);
+            const previous_track_command = [1]event_system.SubsystemActionIndex{.{
+                .subsystem = Playlist.subsystem_index,
+                .index = Playlist.doPreviousTrackPlay(),
+            }};
+
+            action_writer.onClickLeft(previous_track_command[0..]);
         }
     };
 };
