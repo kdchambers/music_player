@@ -20,6 +20,9 @@ const Playlist = @This();
 
 pub var storage_opt: ?*Storage = null;
 var are_durations_available: bool = false;
+var command_list: memory.FixedBuffer(Command, 64) = .{};
+pub var output_events: FixedAtomicEventQueue(Event, 20) = .{};
+var current_track_index_opt: ?u16 = null;
 
 const Event = enum(u8) {
     new_track_started,
@@ -46,9 +49,6 @@ pub const AudioDurationTime = struct {
     minutes: u16,
 };
 
-pub var output_events: FixedAtomicEventQueue(Event, 20) = .{};
-var current_track_index_opt: ?u16 = null;
-
 pub fn reset() void {
     _ = output_events.collect();
 }
@@ -67,61 +67,6 @@ pub fn secondsToAudioDurationTime(seconds: u16) AudioDurationTime {
     return .{
         .seconds = current_seconds,
         .minutes = current_minutes,
-    };
-}
-
-pub fn trackCount() u16 {
-    //
-}
-
-fn calculateDurations(storage_arg: *Storage) void {
-    for (storage_arg.entriesMut()) |*entry| {
-        const absolute_path = entry.absolutePathZ() catch |err| {
-            std.log.err("Failed to create absolute path for opening: Error -> {s}. Skipping", .{err});
-            continue;
-        };
-        const file = std.fs.openFileAbsolute(absolute_path, .{ .mode = .read_only }) catch |err| {
-            std.log.err("Failed to open file: {s} with err code {s}. Skipping", .{ absolute_path, err });
-            continue;
-        };
-        errdefer file.close();
-
-        const file_stat = file.stat() catch |err| {
-            std.log.err("Failed to stat file {s}. Error -> {s}. Skipping", .{ absolute_path, err });
-            continue;
-        };
-
-        const file_size = file_stat.size;
-        var file_buffer = std.heap.page_allocator.alloc(u8, file_size) catch |err| {
-            std.log.err("Failed to allocate {d} bytes for file {s}. Error -> {s}. Skipping", .{ file_size, absolute_path, err });
-            continue;
-        };
-        errdefer std.heap.page_allocator.free(file_buffer);
-
-        const bytes_read = file.readAll(file_buffer) catch |err| {
-            std.log.err("Failed to read from file {s}. Error -> {s}. Skipping", .{ absolute_path, err });
-            continue;
-        };
-
-        // TODO: Handle this case
-        if (bytes_read < file_size) {
-            std.log.err("Failed to read all bytes of {s}. Skipping", .{absolute_path});
-            continue;
-        }
-
-        entry.duration_seconds = @intCast(u16, audio.mp3.calculateDurationSecondsFromFile(&file_buffer));
-        std.log.info("Track length: {d} seconds for {s}", .{ entry.duration_seconds, absolute_path });
-
-        // TODO: Reuse allocated memory
-        file.close();
-        std.heap.page_allocator.free(file_buffer);
-    }
-
-    std.log.info("Durations calculated for playlist", .{});
-    are_durations_available = true;
-
-    output_events.add(.duration_calculated) catch |err| {
-        std.log.err("Failed to add .duration_calculated event to Playlist event queue -> {s}", .{err});
     };
 }
 
@@ -179,14 +124,6 @@ pub fn trackPrevious() !void {
     } else unreachable;
 }
 
-pub fn trackPause() !void {}
-
-pub fn trackResume() !void {}
-
-pub fn stop() void {}
-
-var command_list: memory.FixedBuffer(Command, 64) = .{};
-
 pub fn doPlayIndex(index: u16) event_system.ActionIndex {
     std.debug.assert(index < Command.command_base_index);
     return @intCast(event_system.ActionIndex, index + Command.play_audio_command_base);
@@ -195,16 +132,6 @@ pub fn doPlayIndex(index: u16) event_system.ActionIndex {
 pub fn doInitAndPlayIndex(index: u16) event_system.ActionIndex {
     std.debug.assert(index < Command.command_base_index);
     return @intCast(event_system.ActionIndex, index + Command.init_and_play_audio_command_base);
-}
-
-pub fn create(
-    arena: *memory.LinearArena,
-    directory: std.fs.Dir,
-    entry_offset: u32,
-    max_entries: u16,
-) !void {
-    storage_opt = try Storage.create(arena, directory, entry_offset, max_entries);
-    _ = try std.Thread.spawn(.{}, calculateDurations, .{storage_opt.?});
 }
 
 pub inline fn doNextTrackPlay() event_system.ActionIndex {
