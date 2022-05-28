@@ -172,13 +172,14 @@ pub const navigation = struct {
             file_handle.close();
         }
     }
+
     pub var subsystem_index: event_system.SubsystemIndex = undefined;
 
     pub var directoryview_storage: *DirectoryContents = undefined;
-    pub var trackview_storage_opt: ?*Storage = undefined;
+    pub var trackview_storage_opt: ?*Storage = null;
 
     pub var directoryview_path: std.fs.Dir = undefined;
-    pub var trackview_path_opt: ?std.fs.Dir = undefined;
+    pub var trackview_path_opt: ?std.fs.Dir = null;
 
     pub var message_queue: FixedAtomicEventQueue(Event, 10) = .{};
     pub var root_depth: u16 = 0;
