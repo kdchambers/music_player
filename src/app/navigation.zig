@@ -47,11 +47,14 @@ const DirectoryContents = struct {
 
     /// Returns the name of the file at the index given
     pub fn filename(self: @This(), index: u8) []const u8 {
+        std.debug.assert(index < self.count);
         const base = @intToPtr([*]const u8, @ptrToInt(&self) + @sizeOf(@This()));
+
         var i: u16 = 0;
         var offset: u16 = 0;
         var length: u8 = 0;
-        while (i < (index + 1)) : (i += 1) {
+        while (i <= index) : (i += 1) {
+            std.debug.assert(i < self.size);
             length = base[offset];
             offset += (length + 2);
         }
@@ -99,9 +102,10 @@ const DirectoryContents = struct {
 
     pub fn contentsPrint(self: @This()) void {
         const print = std.debug.print;
-        var i: u8 = 0;
-        print("DIRECTORY CONTENTS: {d}\n", .{self.count});
-        while (i < (self.count - 1)) : (i += 1) {
+        var i: u8 = 1;
+        const count: usize = self.count - 1;
+        print("DIRECTORY CONTENTS: {d}\n", .{count});
+        while (i < count) : (i += 1) {
             print("  {d}: '{s}'\n", .{ i, self.filename(i) });
         }
     }

@@ -41,6 +41,8 @@ const AbsolutePath = storage.AbsolutePath;
 const String = storage.String;
 const Playlist = @import("Playlist.zig");
 
+pub const log_level: std.log.Level = .info;
+
 // TODO
 //
 // - Reset progress bar after track finishes
@@ -200,14 +202,12 @@ pub fn main() !void {
         return;
     }
 
-    std.log.info("Initialized", .{});
     glfw.setHint(.client_api, .none);
 
     var graphics_context: GraphicsContext = undefined;
     graphics_context.window = try glfw.createWindow(constants.initial_window_dimensions, constants.application_title);
 
     const window_size = glfw.getFramebufferSize(graphics_context.window);
-
     graphics_context.screen_dimensions.width = window_size.width;
     graphics_context.screen_dimensions.height = window_size.height;
 
