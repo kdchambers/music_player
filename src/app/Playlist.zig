@@ -12,21 +12,29 @@ const String = mini_addr.String;
 const AbsolutePath = mini_addr.AbsolutePath;
 const SubPath = mini_addr.SubPath;
 const FixedAtomicEventQueue = @import("message_queue").FixedAtomicEventQueue;
+const navigation = @import("navigation.zig").navigation;
 
 pub var subsystem_index: event_system.SubsystemIndex = undefined;
 
 const Playlist = @This();
 
-pub var storage: *Storage = undefined;
+pub var storage_opt: ?*Storage = null;
 var are_durations_available: bool = false;
 
 const Event = enum(u8) {
     new_track_started,
     playlist_finished,
     duration_calculated,
+    playlist_initialized,
 };
 
 const Command = struct {
+    const play_audio_command_base: u8 = 0;
+    const play_audio_range: u8 = 64;
+
+    const init_and_play_audio_command_base: u8 = 64;
+    const init_and_play_audio_range: u8 = 64;
+
     const command_base_index: u8 = 200;
 
     const track_next: u8 = command_base_index + 0;
@@ -117,74 +125,58 @@ fn calculateDurations(storage_arg: *Storage) void {
     };
 }
 
-pub fn durationList(output_buffer: [64]u16) ![]u16 {
-    if (!are_durations_available) {
-        return error.DurationsNotAvailable;
-    }
-    // TODO:
-    if (storage.track_entry_count > 64) {
-        return error.TooManyTracks;
-    }
-
-    for (storage.entries()) |entry, entry_i| {
-        output_buffer[entry_i] = entry.duration;
-    }
-
-    return output_buffer[0..storage.track_entry_count];
-}
-
 pub fn trackNext() !void {
-    if (current_track_index_opt) |current_track_index| {
-        const new_track_index: u16 = current_track_index + 1;
+    if (storage_opt) |storage| {
+        if (current_track_index_opt) |current_track_index| {
+            const new_track_index: u16 = current_track_index + 1;
+            if (new_track_index == storage.entries().len) {
+                return;
+            }
 
-        if (new_track_index == storage.entries().len) {
-            current_track_index_opt = null;
-            try output_events.add(.playlist_finished);
-            std.log.info("Playlist finished", .{});
-            return;
+            std.debug.assert(new_track_index < storage.entries().len);
+
+            const absolute_path = storage.entries()[new_track_index].absolutePathZ() catch |err| {
+                std.log.err("Failed to create absolute path for playlist index {d}. Error -> {s}", .{ new_track_index, err });
+                return;
+            };
+
+            try audio.input_event_buffer.add(.stop_requested);
+
+            audio.mp3.playFile(std.heap.c_allocator, absolute_path) catch |err| {
+                std.log.err("Failed to play track index {d} -> {s}", .{ new_track_index, err });
+            };
+
+            current_track_index_opt = new_track_index;
+        } else {
+            std.log.warn("Cannot invoke trackNext in inactive playlist", .{});
         }
-
-        std.debug.assert(new_track_index < storage.entries().len);
-
-        const absolute_path = storage.entries()[new_track_index].absolutePathZ() catch |err| {
-            std.log.err("Failed to create absolute path for playlist index {d}. Error -> {s}", .{ new_track_index, err });
-            return;
-        };
-
-        try audio.input_event_buffer.add(.stop_requested);
-
-        audio.mp3.playFile(std.heap.c_allocator, absolute_path) catch |err| {
-            std.log.err("Failed to play track index {d} -> {s}", .{ new_track_index, err });
-        };
-
-        current_track_index_opt = new_track_index;
-    } else {
-        std.log.warn("Cannot invoke trackNext in inactive playlist", .{});
-    }
+    } else unreachable;
 }
 
 pub fn trackPrevious() !void {
-    if (current_track_index_opt) |current_track_index| {
-        if (current_track_index == 0) {
-            return;
+    if (storage_opt) |storage| {
+        if (current_track_index_opt) |current_track_index| {
+            if (current_track_index == 0) {
+                return;
+            }
+
+            const new_track_index: u16 = current_track_index - 1;
+            const absolute_path = storage.entries()[new_track_index].absolutePathZ() catch |err| {
+                std.log.err("Failed to create absolute path for playlist index {d}. Error -> {s}", .{ new_track_index, err });
+                return;
+            };
+
+            try audio.input_event_buffer.add(.stop_requested);
+
+            audio.mp3.playFile(std.heap.c_allocator, absolute_path) catch |err| {
+                std.log.err("Failed to play track index {d} -> {s}", .{ new_track_index, err });
+            };
+
+            current_track_index_opt = new_track_index;
+        } else {
+            std.log.warn("Cannot invoke trackPrevious in inactive playlist", .{});
         }
-
-        const new_track_index: u16 = current_track_index - 1;
-        const absolute_path = storage.entries()[new_track_index].absolutePathZ() catch |err| {
-            std.log.err("Failed to create absolute path for playlist index {d}. Error -> {s}", .{ new_track_index, err });
-            return;
-        };
-
-        try audio.input_event_buffer.add(.stop_requested);
-
-        audio.mp3.playFile(std.heap.c_allocator, absolute_path) catch |err| {
-            std.log.err("Failed to play track index {d} -> {s}", .{ new_track_index, err });
-        };
-
-        current_track_index_opt = new_track_index;
-    } else {
-        std.log.warn("Cannot invoke trackPrevious in inactive playlist", .{});
-    }
+    } else unreachable;
 }
 
 pub fn trackPause() !void {}
@@ -197,7 +189,12 @@ var command_list: memory.FixedBuffer(Command, 64) = .{};
 
 pub fn doPlayIndex(index: u16) event_system.ActionIndex {
     std.debug.assert(index < Command.command_base_index);
-    return @intCast(event_system.ActionIndex, index);
+    return @intCast(event_system.ActionIndex, index + Command.play_audio_command_base);
+}
+
+pub fn doInitAndPlayIndex(index: u16) event_system.ActionIndex {
+    std.debug.assert(index < Command.command_base_index);
+    return @intCast(event_system.ActionIndex, index + Command.init_and_play_audio_command_base);
 }
 
 pub fn create(
@@ -206,8 +203,8 @@ pub fn create(
     entry_offset: u32,
     max_entries: u16,
 ) !void {
-    storage = try Storage.create(arena, directory, entry_offset, max_entries);
-    _ = try std.Thread.spawn(.{}, calculateDurations, .{storage});
+    storage_opt = try Storage.create(arena, directory, entry_offset, max_entries);
+    _ = try std.Thread.spawn(.{}, calculateDurations, .{storage_opt.?});
 }
 
 pub inline fn doNextTrackPlay() event_system.ActionIndex {
@@ -218,22 +215,32 @@ pub inline fn doPreviousTrackPlay() event_system.ActionIndex {
     return @intCast(event_system.ActionIndex, Command.track_previous);
 }
 
+fn playIndex(index: u16) void {
+    std.log.info("Index: {d}", .{index});
+    std.debug.assert(index < storage_opt.?.entries().len);
+
+    const absolute_path = storage_opt.?.entries()[index].absolutePathZ() catch |err| {
+        std.log.err("Failed to create absolute path for playlist index {d}. Error -> {s}", .{ index, err });
+        return;
+    };
+    audio.mp3.playFile(std.heap.c_allocator, absolute_path) catch |err| {
+        std.log.err("Failed to play track index {d} -> {s}", .{ index, err });
+    };
+    current_track_index_opt = index;
+}
+
 pub fn doAction(index: event_system.ActionIndex) void {
-    if (index < Command.command_base_index) {
-        // Command is a 'track_play' command.
-        // Use index directly to select track
-        std.log.info("Index: {d}", .{index});
-        std.debug.assert(index < storage.entries().len);
-
-        const absolute_path = storage.entries()[index].absolutePathZ() catch |err| {
-            std.log.err("Failed to create absolute path for playlist index {d}. Error -> {s}", .{ index, err });
-            return;
+    const init_and_play_max = Command.init_and_play_audio_command_base + Command.init_and_play_audio_range;
+    const audio_play_max = Command.play_audio_command_base + Command.play_audio_range;
+    if (index >= Command.init_and_play_audio_command_base and index < init_and_play_max) {
+        storage_opt = navigation.trackview_storage_opt;
+        playIndex(index - Command.init_and_play_audio_command_base);
+        output_events.add(.playlist_initialized) catch |err| {
+            std.log.err("Failed to add .playlist_initialized event to Playlist event queue -> {s}", .{err});
         };
-        audio.mp3.playFile(std.heap.c_allocator, absolute_path) catch |err| {
-            std.log.err("Failed to play track index {d} -> {s}", .{ index, err });
-        };
-
-        current_track_index_opt = index;
+    } else if (index >= Command.play_audio_command_base and index < audio_play_max) {
+        // TODO: Will this ever be called?
+        playIndex(index - Command.play_audio_command_base);
     } else {
         switch (index) {
             Command.track_next => trackNext() catch |err| std.log.err("Failed to play next track. Error -> {s}", .{err}),
@@ -263,26 +270,22 @@ pub const Storage = struct {
             return String.value(self.artist_index);
         }
 
-        // pub fn duration(self: @This()) []const u8 {
-        //     _ = self;
-        //     // TODO: Implemnent
-        //     return "00:00";
-        // }
-
         pub fn absolutePathZ(self: @This()) ![:0]const u8 {
             return try SubPath.interface.absolutePathZ(self.path_index);
         }
     };
 
-    track_entry_count: u16,
+    track_entry_count: u16 = 0,
     parent_path: AbsolutePath.Index,
     track_list_index: u16,
 
     pub fn entries(self: @This()) []const TrackEntry {
+        if (self.track_entry_count == 0) return &[0]TrackEntry{};
         return @ptrCast([*]const TrackEntry, @alignCast(2, &mini_addr.memory_space[self.track_list_index]))[0..self.track_entry_count];
     }
 
     pub fn entriesMut(self: @This()) []TrackEntry {
+        if (self.track_entry_count == 0) return &[0]TrackEntry{};
         return @ptrCast([*]TrackEntry, @alignCast(2, &mini_addr.memory_space[self.track_list_index]))[0..self.track_entry_count];
     }
 

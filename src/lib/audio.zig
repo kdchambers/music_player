@@ -747,14 +747,14 @@ pub const mp3 = struct {
         .buffer = undefined,
     };
 
-    pub fn calculateDurationSecondsFromFile(input_buffer: *[]const u8) u32 {
+    pub fn calculateDurationSecondsFromFile(input_buffer: *[]const u8) u16 {
         var decoder: mad.mad_decoder = undefined;
         output.audio_duration = 0.0;
         mad.mad_decoder_init(&decoder, @ptrCast(*anyopaque, input_buffer), inputCallback, headerCallback, null, null, errorCallback, null);
         _ = mad.mad_decoder_run(&decoder, mad.MAD_DECODER_MODE_SYNC);
         _ = mad.mad_decoder_finish(&decoder);
         is_decoded = false;
-        return @floatToInt(u32, output.audio_duration);
+        return @floatToInt(u16, output.audio_duration);
     }
 
     fn decode(input_buffer: *[]const u8) void {
@@ -990,7 +990,12 @@ pub const flac = struct {
         log.info("Warning: Error occurred in audio processing", .{});
     }
 
-    pub fn writeCallback(decoder: [*c]const libflac.FLAC__StreamDecoder, frame: [*c]const libflac.FLAC__Frame, buffer: [*c]const [*c]const libflac.FLAC__int32, client_data: ?*anyopaque) callconv(.C) libflac.FLAC__StreamDecoderWriteStatus {
+    pub fn writeCallback(
+        decoder: [*c]const libflac.FLAC__StreamDecoder,
+        frame: [*c]const libflac.FLAC__Frame,
+        buffer: [*c]const [*c]const libflac.FLAC__int32,
+        client_data: ?*anyopaque,
+    ) callconv(.C) libflac.FLAC__StreamDecoderWriteStatus {
         _ = decoder;
         var output_buffer = @ptrCast(*OutputBuffer, @alignCast(8, client_data));
 

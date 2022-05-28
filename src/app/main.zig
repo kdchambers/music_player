@@ -49,7 +49,7 @@ const Playlist = @import("Playlist.zig");
 // - Indicator of track playing
 // - Show track details on side
 // - How time markers beside progress bar
-// - Next and previous buttons
+// - [done] Next and previous buttons
 // - Update example library to have albums
 // - Next track will automatically play
 // - Get flac to work again
@@ -62,8 +62,7 @@ var is_draw_required: bool = true;
 
 var current_audio_index: u16 = 0;
 var quad_face_writer_pool: QuadFaceWriterPool(GenericVertex) = undefined;
-var main_arena = memory.LinearArena{};
-var directory_list: [][]const u8 = undefined;
+var main_arena: memory.LinearArena = .{};
 
 const ScreenScaleFactor = graphics.ScreenScaleFactor(
     .{
@@ -190,12 +189,6 @@ pub fn main() !void {
         try navigation.init(&main_arena, current_directory);
     }
 
-    //
-    // Load all media items in the library root directory
-    //
-
-    var graphics_context: GraphicsContext = undefined;
-
     glfw.initialize() catch |err| {
         std.log.err("Failed to initialized glfw. Error: {s}", .{err});
         return;
@@ -209,6 +202,8 @@ pub fn main() !void {
 
     std.log.info("Initialized", .{});
     glfw.setHint(.client_api, .none);
+
+    var graphics_context: GraphicsContext = undefined;
     graphics_context.window = try glfw.createWindow(constants.initial_window_dimensions, constants.application_title);
 
     const window_size = glfw.getFramebufferSize(graphics_context.window);
@@ -1453,7 +1448,6 @@ fn update(allocator: Allocator, app: *GraphicsContext) !void {
     vertex_buffer_count = 0;
 
     ui.reset();
-    navigation.reset();
     audio.reset();
     event_system.resetBindings();
 
@@ -1487,15 +1481,15 @@ fn update(allocator: Allocator, app: *GraphicsContext) !void {
     try ui.playlist_buttons.previous.draw(&face_writer, scale_factor, theme);
     try ui.playlist_buttons.toggle.draw(&face_writer, scale_factor, theme);
 
-    if (navigation.contents.count > 1 and screen_dimensions.width >= 300) {
+    if (navigation.directoryview_storage.count > 1 and screen_dimensions.width >= 300) {
         var slice_buffer: [64][]const u8 = undefined;
-        const directory_count = navigation.contents.directoryCount();
+        const directory_count = navigation.directoryview_storage.directoryCount();
         var i: u8 = 0;
         while (i < directory_count) : (i += 1) {
-            slice_buffer[i] = navigation.contents.filename(i);
+            slice_buffer[i] = navigation.directoryview_storage.filename(i);
         }
 
-        const width_percentage: f32 = if (navigation.playlist_path_opt != null) 0.6 else 0.9;
+        const width_percentage: f32 = if (navigation.trackview_path_opt != null) 0.6 else 0.9;
         const placement = scale_factor.convertPoint(.pixel, .ndc_right, .{
             .x = 20,
             .y = 200,
@@ -1504,7 +1498,7 @@ fn update(allocator: Allocator, app: *GraphicsContext) !void {
         const directory_screen_space = geometry.Extent2D(ScreenNormalizedBaseType){
             .width = width_percentage * 2.0,
             .height = 1.6,
-            .x = if (navigation.playlist_path_opt == null) placement.x else -1.0,
+            .x = if (navigation.trackview_path_opt == null) placement.x else -1.0,
             .y = -0.7,
         };
 
@@ -1519,7 +1513,7 @@ fn update(allocator: Allocator, app: *GraphicsContext) !void {
         );
     }
 
-    if (navigation.playlist_path_opt) |playlist_path| {
+    if (navigation.trackview_path_opt) |trackview_path| {
         const draw_region = geometry.Extent2D(ScreenPixelBaseType){
             .x = screen_dimensions.width - 400,
             .y = 103,
@@ -1527,33 +1521,24 @@ fn update(allocator: Allocator, app: *GraphicsContext) !void {
             .height = 800,
         };
 
-        var playlist_path_buffer: [256]u8 = undefined;
-        const playlist_path_string = try playlist_path.realpath(".", playlist_path_buffer[0..]);
+        if (navigation.trackview_storage_opt == null) {
+            std.debug.assert(false);
+            navigation.trackview_storage_opt = try Playlist.Storage.create(&main_arena, trackview_path, 0, 20);
+        }
 
-        const playlist_directory_name = parseFileNameFromPath(playlist_path_string) catch "Unknown";
+        var trackview_path_buffer: [256]u8 = undefined;
+        const trackview_path_string = try trackview_path.realpath(".", trackview_path_buffer[0..]);
+
+        const trackview_directory_name = parseFileNameFromPath(trackview_path_string) catch "Unknown";
         try ui.track_view.draw(
             &face_writer,
-            Playlist.storage,
+            navigation.trackview_storage_opt.?,
             glyph_set,
             scale_factor,
             theme,
-            playlist_directory_name,
+            trackview_directory_name,
             draw_region,
         );
-
-        const origin_event = event_system.SubsystemEventIndex{
-            .subsystem = audio.subsystem_index,
-            .index = @intCast(event_system.EventIndex, @enumToInt(audio.AudioEvent.finished)),
-        };
-
-        // Add an action handler that will start the progress bar callback
-        // when audio starts playing
-        const target_event = event_system.SubsystemActionIndex{
-            .subsystem = Playlist.subsystem_index,
-            .index = Playlist.doNextTrackPlay(),
-        };
-
-        _ = event_system.internalEventsBind(.{ .origin = origin_event, .target = target_event });
     }
 
     vertex_buffer_count = face_writer.used;
@@ -1591,6 +1576,7 @@ fn appLoop(allocator: Allocator, app: *GraphicsContext) !void {
             screen.height != screen_dimensions.height)
         {
             framebuffer_resized = true;
+            std.log.info("Framebuffer resized", .{});
             screen_dimensions.width = screen.width;
             screen_dimensions.height = screen.height;
 
@@ -1613,29 +1599,41 @@ fn appLoop(allocator: Allocator, app: *GraphicsContext) !void {
             }
         }
 
+        // TODO: Remove
         for (Playlist.output_events.collect()) |event| {
-            if (event == .duration_calculated) {
-                std.log.info("Durations calculated. Redraw required", .{});
-                // TODO: Update UI without a full redraw
-                is_draw_required = true;
-                break;
+            if (event == .playlist_initialized) {
+                const origin_event = event_system.SubsystemEventIndex{
+                    .subsystem = audio.subsystem_index,
+                    .index = @intCast(event_system.EventIndex, @enumToInt(audio.AudioEvent.finished)),
+                };
+
+                const target_event = event_system.SubsystemActionIndex{
+                    .subsystem = Playlist.subsystem_index,
+                    .index = Playlist.doNextTrackPlay(),
+                };
+
+                _ = event_system.internalEventsBind(.{ .origin = origin_event, .target = target_event });
             }
         }
 
         for (navigation.message_queue.collect()) |message| {
-            // TODO: Switch
-            if (message == .playlist_opened) {
-                event_system.resetBindings();
-                try Playlist.create(&main_arena, navigation.playlist_path_opt.?, 0, 20);
-                is_draw_required = true;
-                break;
-            }
-            if (message == .directory_changed) {
-                const checkpoint_index = @enumToInt(RewindLevel.directory_changed);
-                main_arena.rewindTo(@intCast(u16, arena_checkpoints[checkpoint_index]));
-                try navigation.init(&main_arena, navigation.current_path);
-                is_draw_required = true;
-                break;
+            switch (message) {
+                .trackview_opened => {
+                    if (navigation.trackview_path_opt) |trackview_path| {
+                        navigation.trackview_storage_opt = try Playlist.Storage.create(&main_arena, trackview_path, 0, 20);
+                        _ = try std.Thread.spawn(.{}, navigation.calculateDurationsWrapper, .{navigation.trackview_storage_opt.?});
+                        is_draw_required = true;
+                    }
+                },
+                .directory_changed => {
+                    const checkpoint_index = @enumToInt(RewindLevel.directory_changed);
+                    main_arena.rewindTo(@intCast(u16, arena_checkpoints[checkpoint_index]));
+                    try navigation.init(&main_arena, navigation.directoryview_path);
+                    is_draw_required = true;
+                },
+                .duration_calculated => {
+                    is_draw_required = true;
+                },
             }
         }
 
@@ -1665,8 +1663,6 @@ fn appLoop(allocator: Allocator, app: *GraphicsContext) !void {
         const frame_duration_ms = frame_end_ms - frame_start_ms;
 
         event_system.handleTimeEvents(frame_end_ms);
-        // TODO: Call only when required
-        is_render_requested = true;
 
         // TODO: I think the loop is running less than 1ms so you should update
         //       to nanosecond precision

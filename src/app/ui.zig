@@ -22,7 +22,10 @@ const memory = @import("memory");
 const navigation = @import("navigation.zig").navigation;
 const Playlist = @import("Playlist");
 
-const ScreenScaleFactor = graphics.ScreenScaleFactor(.{ .NDCRightType = ScreenNormalizedBaseType, .PixelType = ScreenPixelBaseType });
+const ScreenScaleFactor = graphics.ScreenScaleFactor(.{
+    .NDCRightType = ScreenNormalizedBaseType,
+    .PixelType = ScreenPixelBaseType,
+});
 
 const ui = @This();
 
@@ -261,9 +264,16 @@ pub const track_view = struct {
                 .height = 30 * scale_factor.vertical,
             };
 
+            // If the playlist isn't initialized, we want to initialize
+            // and play track at the same time.
+            const command_index = if (Playlist.storage_opt != null)
+                Playlist.doPlayIndex(@intCast(u16, track_index))
+            else
+                Playlist.doInitAndPlayIndex(@intCast(u16, track_index));
+
             const play_track_action = event_system.SubsystemActionIndex{
                 .subsystem = Playlist.subsystem_index,
-                .index = Playlist.doPlayIndex(@intCast(u16, track_index)),
+                .index = command_index,
             };
 
             const null_action = event_system.SubsystemActionIndex.null_value;
@@ -385,11 +395,6 @@ pub const directory_view = struct {
             .on_hover_color_opt = @intCast(u8, gui.color_list.append(theme.folder_hovered)),
         };
 
-        const do_select_directory = try navigation.doDirectorySelect();
-
-        std.log.info("Actions created: {d}. Directories {d}", .{ do_select_directory.action_count, directory_name_list.len });
-        std.debug.assert(do_select_directory.action_count == directory_name_list.len);
-
         for (directory_name_list) |directory_name, directory_name_i| {
             // TODO:
             const directory_name_full = directory_name;
@@ -428,8 +433,8 @@ pub const directory_view = struct {
             }
 
             action_config.on_click_left_action_list[0] = event_system.SubsystemActionIndex{
-                .index = @intCast(event_system.ActionIndex, do_select_directory.base_action_index + directory_name_i),
-                .subsystem = do_select_directory.subsystem,
+                .index = navigation.doDirectorySelect(@intCast(u8, directory_name_i)),
+                .subsystem = navigation.subsystem_index,
             };
 
             _ = try gui.button.generate(
