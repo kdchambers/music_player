@@ -235,6 +235,22 @@ pub const track_view = struct {
             .height = scale_factor.convertLength(.pixel, .ndc_right, .vertical, draw_region.height),
         };
 
+        const active_track_background_color = graphics.RGBA(f32){
+            .r = 0.7,
+            .g = 0.5,
+            .b = 0.3,
+            .a = 1.0,
+        };
+
+        const active_track_index_opt = blk: {
+            if (Playlist.current_track_index_opt) |current_track_index| {
+                if (navigation.isPlaylistAlsoTrackview()) {
+                    break :blk current_track_index;
+                }
+            }
+            break :blk null;
+        };
+
         const background_color = graphics.RGBA(f32){
             .r = 0.6,
             .g = 0.4,
@@ -287,6 +303,15 @@ pub const track_view = struct {
                 },
             };
 
+            const track_background_color = blk: {
+                if (active_track_index_opt) |active_track_index| {
+                    if (active_track_index == track_index) {
+                        break :blk active_track_background_color;
+                    }
+                }
+                break :blk theme.track_background;
+            };
+
             const track_item_faces = try gui.button.generate(
                 GenericVertex,
                 face_writer,
@@ -294,7 +319,7 @@ pub const track_view = struct {
                 button_label,
                 track_item_extent,
                 scale_factor,
-                theme.track_background,
+                track_background_color,
                 theme.track_text,
                 .left,
                 action_config,
@@ -463,12 +488,19 @@ pub const directory_up_button = struct {
     ) !void {
         const button_extent = geometry.Extent2D(ScreenNormalizedBaseType){
             .x = -0.95,
-            .y = -0.72,
+            .y = -0.78,
             .width = 50 * scale_factor.horizontal,
             .height = 25 * scale_factor.vertical,
         };
 
-        const widget_index = face_writer.indexFromBase();
+        var action_config = gui.button.ActionConfig{
+            .on_hover_color_opt = @intCast(u8, gui.color_list.append(theme.folder_hovered)),
+        };
+
+        action_config.on_click_left_action_list[0] = event_system.SubsystemActionIndex{
+            .index = navigation.doDirectoryUp(),
+            .subsystem = navigation.subsystem_index,
+        };
 
         _ = try gui.button.generate(
             GenericVertex,
@@ -480,51 +512,9 @@ pub const directory_up_button = struct {
             theme.return_button_background,
             theme.return_button_foreground,
             .center,
-            .{},
+            action_config,
+            .top_left,
         );
-
-        const button_color_index = action.color_list.append(theme.return_button_background);
-        const on_hover_color_index = action.color_list.append(theme.return_button_background_hovered);
-
-        // Index of the quad face (I.e Mulples of 4 faces) within the face allocator
-        // const widget_index = calculateQuadIndex(vertices, faces);
-
-        // NOTE: system_actions needs to correspond to given on_hover_event_ids here
-        {
-            const on_hover_event_ids = event_system.registerMouseHoverReflexiveEnterAction(button_extent);
-            const vertex_attachment_index = @intCast(u8, action.vertex_range_attachments.append(.{ .vertex_begin = @intCast(u24, widget_index), .vertex_count = gui.button.face_count }));
-
-            const on_hover_enter_action_payload = action.PayloadColorSet{
-                .vertex_range_begin = vertex_attachment_index,
-                .vertex_range_span = 1,
-                .color_index = @intCast(u8, on_hover_color_index),
-            };
-
-            const on_hover_exit_action_payload = action.PayloadColorSet{
-                .vertex_range_begin = vertex_attachment_index,
-                .vertex_range_span = 1,
-                .color_index = @intCast(u8, button_color_index),
-            };
-
-            const on_hover_exit_action = action.Action{ .action_type = .color_set, .payload = .{ .color_set = on_hover_exit_action_payload } };
-            const on_hover_enter_action = action.Action{ .action_type = .color_set, .payload = .{ .color_set = on_hover_enter_action_payload } };
-
-            std.debug.assert(on_hover_event_ids[0] == action.system_actions.append(on_hover_enter_action));
-            std.debug.assert(on_hover_event_ids[1] == action.system_actions.append(on_hover_exit_action));
-        }
-
-        {
-            //
-            // When back button is clicked, change to parent directory
-            //
-
-            const on_click_event = event_system.registerMouseLeftPressAction(button_extent);
-
-            const directory_select_parent_action_payload = action.PayloadDirectorySelect{ .directory_id = parent_directory_id };
-            const directory_select_parent_action = action.Action{ .action_type = .directory_select, .payload = .{ .directory_select = directory_select_parent_action_payload } };
-
-            std.debug.assert(on_click_event == action.system_actions.append(directory_select_parent_action));
-        }
     }
 };
 
@@ -582,7 +572,7 @@ pub const progress_bar = struct {
     pub fn update() void {
         if (progress_bar_face_quad_opt) |progress_bar_face_quad| {
             const progress = audio.output.progress() catch 0.0;
-            std.log.info("Progress bar update: {d}", .{progress});
+            // std.log.info("Progress bar update: {d}", .{progress});
             foreground.draw(progress_bar_face_quad, progress, stored_scale_factor.?, stored_forground_color);
         } else {
             std.log.warn("Cannot update progress bar: Hasn't been initially created", .{});

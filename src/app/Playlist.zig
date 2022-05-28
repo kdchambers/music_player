@@ -22,7 +22,7 @@ pub var storage_opt: ?*Storage = null;
 var are_durations_available: bool = false;
 var command_list: memory.FixedBuffer(Command, 64) = .{};
 pub var output_events: FixedAtomicEventQueue(Event, 20) = .{};
-var current_track_index_opt: ?u16 = null;
+pub var current_track_index_opt: ?u16 = null;
 
 const Event = enum(u8) {
     new_track_started,
@@ -86,7 +86,15 @@ pub fn trackNext() !void {
             };
 
             try audio.input_event_buffer.add(.stop_requested);
-
+            const max_loop_count: u32 = 1000;
+            var i: u32 = 0;
+            while (audio.output.getState() != .stopped and i < max_loop_count) : (i += 1) {
+                std.time.sleep(std.time.ns_per_ms * 50);
+            }
+            if (i == max_loop_count) {
+                std.log.err("Failed to stop audio thread..", .{});
+                return;
+            }
             audio.mp3.playFile(std.heap.c_allocator, absolute_path) catch |err| {
                 std.log.err("Failed to play track index {d} -> {s}", .{ new_track_index, err });
             };
@@ -95,7 +103,9 @@ pub fn trackNext() !void {
         } else {
             std.log.warn("Cannot invoke trackNext in inactive playlist", .{});
         }
-    } else unreachable;
+    } else {
+        std.debug.assert(false);
+    }
 }
 
 pub fn trackPrevious() !void {

@@ -170,6 +170,11 @@ pub const AbsolutePath = struct {
             return self.data[path_index .. start_index + sub_path.len];
         }
 
+        pub inline fn value(index: AbsolutePath.Index) []const u8 {
+            const root_len = length(index);
+            return storage.memory_space[index + path_index .. index + path_index + root_len];
+        }
+
         pub inline fn absolutePathZ(index: AbsolutePath.Index, sub_path: []const u8) ![:0]const u8 {
             const writable_space = writableSpaceSize(index);
             if ((sub_path.len + 1) > writable_space) {

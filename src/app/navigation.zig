@@ -173,6 +173,15 @@ pub const navigation = struct {
         }
     }
 
+    pub fn isPlaylistAlsoTrackview() bool {
+        if (Playlist.storage_opt) |playlist_storage| {
+            if (trackview_storage_opt) |trackview_storage| {
+                return playlist_storage == trackview_storage;
+            }
+        }
+        return false;
+    }
+
     pub var subsystem_index: event_system.SubsystemIndex = undefined;
 
     pub var directoryview_storage: *DirectoryContents = undefined;
@@ -220,6 +229,10 @@ pub const navigation = struct {
     pub inline fn doDirectorySelect(directory_index: u8) event_system.ActionIndex {
         std.debug.assert(directory_index < Command.invoke_directory_range);
         return @intCast(event_system.ActionIndex, directory_index + Command.invoke_directory_base_index);
+    }
+
+    pub inline fn doDirectoryUp() event_system.ActionIndex {
+        return @intCast(event_system.ActionIndex, Command.cd_up);
     }
 
     pub fn parseExtension(file_name: []const u8) ![]const u8 {
@@ -311,8 +324,12 @@ pub const navigation = struct {
         // NOTE: This action will invalidate most of the state / memory of the application
         //       As a result this action is passed up so that memory can be managed by a higher system
         if (root_depth > 0) {
-            directoryview_path = directoryview_path.openDir("..", .{}) catch |err| {
+            directoryview_path = directoryview_path.openDir("..", .{ .iterate = true }) catch |err| {
                 std.log.err("Failed to change to parent directory. Error: {s}", .{err});
+                return;
+            };
+            message_queue.add(.directory_changed) catch |err| {
+                std.log.err("Failed to add .directory_changed event to message queue. Error -> {s}", .{err});
                 return;
             };
             root_depth -= 1;

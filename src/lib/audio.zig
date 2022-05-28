@@ -812,6 +812,7 @@ pub const mp3 = struct {
         output.audio_duration = 0;
         output.audio_index = 0;
         output.audio_length = 0;
+        output.playback_state = .stopped;
     }
 
     var is_decoded = false;
@@ -1107,7 +1108,6 @@ pub const output = struct {
     }
 
     pub fn progress() !f32 {
-        std.log.info("Progress called", .{});
         if (playback_state == .stopped) {
             return error.NoAudioSource;
         }

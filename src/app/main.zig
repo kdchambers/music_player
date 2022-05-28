@@ -1455,6 +1455,7 @@ fn update(allocator: Allocator, app: *GraphicsContext) !void {
 
     try ui.header.draw(&face_writer, glyph_set, scale_factor, theme);
     try ui.footer.draw(&face_writer, theme);
+    try ui.directory_up_button.draw(&face_writer, glyph_set, scale_factor, theme);
 
     {
         // Progress bar will only ever required 2 quads
@@ -1462,19 +1463,19 @@ fn update(allocator: Allocator, app: *GraphicsContext) !void {
         var progress_bar_quads = try face_writer.allocate(2);
         ui.progress_bar.create(progress_bar_quads, scale_factor, theme);
 
-        const origin_event = event_system.SubsystemEventIndex{
-            .subsystem = audio.subsystem_index,
-            .index = @intCast(event_system.EventIndex, @enumToInt(audio.AudioEvent.started)),
-        };
+        // const origin_event = event_system.SubsystemEventIndex{
+        //     .subsystem = audio.subsystem_index,
+        //     .index = @intCast(event_system.EventIndex, @enumToInt(audio.AudioEvent.started)),
+        // };
 
-        // Add an action handler that will start the progress bar callback
-        // when audio starts playing
-        const target_event = event_system.SubsystemActionIndex{
-            .subsystem = ui.subsystem_index,
-            .index = ui.doStartProgressBar(),
-        };
+        // // Add an action handler that will start the progress bar callback
+        // // when audio starts playing
+        // const target_event = event_system.SubsystemActionIndex{
+        //     .subsystem = ui.subsystem_index,
+        //     .index = ui.doStartProgressBar(),
+        // };
 
-        _ = event_system.internalEventsBind(.{ .origin = origin_event, .target = target_event });
+        // _ = event_system.internalEventsBind(.{ .origin = origin_event, .target = target_event });
     }
 
     try ui.playlist_buttons.next.draw(&face_writer, scale_factor, theme);
@@ -1585,7 +1586,8 @@ fn appLoop(allocator: Allocator, app: *GraphicsContext) !void {
 
         for (audio.output_event_buffer.collect()) |event| {
             if (event == .finished) {
-                event_system.resetActiveTimeIntervalEvents();
+                std.log.info("Track finished. Starting next..", .{});
+                // event_system.resetActiveTimeIntervalEvents();
                 Playlist.trackNext() catch |err| {
                     std.log.warn("Error playing next track in playlist -> {s}", .{err});
                 };
@@ -1619,7 +1621,19 @@ fn appLoop(allocator: Allocator, app: *GraphicsContext) !void {
         for (navigation.message_queue.collect()) |message| {
             switch (message) {
                 .trackview_opened => {
+                    // TODO: Very ugly code
                     if (navigation.trackview_path_opt) |trackview_path| {
+                        if (Playlist.storage_opt) |playlist_storage| {
+                            // Reuse *Storage from Playlist if it matches
+                            const playlist_path = AbsolutePath.interface.value(playlist_storage.parent_path);
+                            const playlist_path_trimmed = playlist_path[0 .. playlist_path.len - 1];
+                            var output_buffer: [256]u8 = undefined;
+                            const trackview_path_string = try trackview_path.realpath(".", output_buffer[0..]);
+                            if (std.mem.eql(u8, playlist_path_trimmed, trackview_path_string)) {
+                                navigation.trackview_storage_opt = playlist_storage;
+                                continue;
+                            }
+                        }
                         navigation.trackview_storage_opt = try Playlist.Storage.create(&main_arena, trackview_path, 0, 20);
                         _ = try std.Thread.spawn(.{}, navigation.calculateDurationsWrapper, .{navigation.trackview_storage_opt.?});
                         is_draw_required = true;
@@ -1635,6 +1649,11 @@ fn appLoop(allocator: Allocator, app: *GraphicsContext) !void {
                     is_draw_required = true;
                 },
             }
+        }
+
+        if (audio.output.getState() == .playing) {
+            ui.progress_bar.update();
+            is_render_requested = true;
         }
 
         if (framebuffer_resized) {
