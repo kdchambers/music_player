@@ -39,7 +39,6 @@ pub var color_list_mutable: memory.FixedBuffer(Color, 10) = .{};
 pub var system_actions: memory.FixedBuffer(Action, 100) = .{};
 pub var vertex_range_attachments: memory.FixedBuffer(VertexRange, 40) = .{};
 
-pub var module_arena: memory.LinearArena = .{};
 pub var vertex_buffer: []GenericVertex = undefined;
 pub var subsystem_index: event_system.SubsystemIndex = undefined;
 
@@ -59,16 +58,8 @@ pub fn reset() void {
 }
 
 pub fn init(
-    arena: *memory.LinearArena,
     vertices: []GenericVertex,
 ) void {
-    const alignment = 4;
-    const allocation_size = 1024;
-    var sub_allocation = arena.allocateAligned(u8, alignment, allocation_size);
-    module_arena = memory.LinearArena{
-        .memory = sub_allocation,
-        .used = 0,
-    };
     vertex_buffer = vertices;
 }
 
@@ -98,9 +89,9 @@ fn doUpdateVertices(payload: *PayloadVerticesUpdate) void {
     var alternate_base_vertex: [*]GenericVertex = &inactive_vertices_attachments.items[alternate_quad_begin];
 
     const largest_range_vertex_count = if (alternate_vertex_count > loaded_vertex_count) alternate_vertex_count else loaded_vertex_count;
+    std.debug.assert(largest_range_vertex_count <= 256);
+    var temp_swap_buffer: [256]GenericVertex = undefined;
 
-    std.debug.assert(module_arena.remainingCount() * @sizeOf(GenericVertex) >= largest_range_vertex_count);
-    var temp_swap_buffer = @ptrCast([*]GenericVertex, module_arena.access())[0..largest_range_vertex_count];
     {
         var i: u32 = 0;
         while (i < (largest_range_vertex_count)) : (i += 1) {
