@@ -7,6 +7,7 @@ The project ships with an example library and is hardcoded to use that.
 ## Dependencies
 
 - zig (master)
+- ao
 - glfw
 - libmad
 - vulkan
