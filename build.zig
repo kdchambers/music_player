@@ -29,28 +29,28 @@ pub fn build(b: *Builder) void {
     
     const geometry_pkg = std.build.Pkg{
         .name = "geometry",
-        .path = .{ .path = lib_src_path ++ "geometry.zig" },
+        .source = .{ .path = lib_src_path ++ "geometry.zig" },
     };
 
     const message_queue_pkg = std.build.Pkg{
         .name = "message_queue",
-        .path = .{ .path = lib_src_path ++ "message_queue.zig" },
+        .source = .{ .path = lib_src_path ++ "message_queue.zig" },
     };
 
     const memory_pkg = std.build.Pkg{
         .name = "memory",
-        .path = .{ .path = lib_src_path ++ "memory.zig" },
+        .source = .{ .path = lib_src_path ++ "memory.zig" },
     };
 
     const storage_pkg = std.build.Pkg{
         .name = "storage",
-        .path = .{ .path = lib_src_path ++ "storage.zig" },
+        .source = .{ .path = lib_src_path ++ "storage.zig" },
         .dependencies = &[_]Pkg{memory_pkg},
     };
 
     const font_pkg = std.build.Pkg{
         .name = "font",
-        .path = .{
+        .source = .{
             .path = lib_src_path ++ "font.zig",
         },
         .dependencies = &[_]Pkg{geometry_pkg},
@@ -58,7 +58,7 @@ pub fn build(b: *Builder) void {
 
     const graphics_pkg = std.build.Pkg{
         .name = "graphics",
-        .path = .{
+        .source = .{
             .path = lib_src_path ++ "graphics.zig",
         },
         .dependencies = &[_]Pkg{geometry_pkg},
@@ -68,18 +68,18 @@ pub fn build(b: *Builder) void {
     //       Add a comptime and remove dependency
     const constants_pkg = std.build.Pkg{
         .name = "constants",
-        .path = .{ .path = app_src_path ++ "constants.zig" },
+        .source = .{ .path = app_src_path ++ "constants.zig" },
         .dependencies = &[_]Pkg{ geometry_pkg, graphics_pkg },
     };
 
     const utility_pkg = std.build.Pkg{
         .name = "utility",
-        .path = .{ .path = app_src_path ++ "utility.zig" },
+        .source = .{ .path = app_src_path ++ "utility.zig" },
     };
 
     const text_pkg = std.build.Pkg{
         .name = "text",
-        .path = .{
+        .source = .{
             .path = lib_src_path ++ "text.zig",
         },
         .dependencies = &[_]Pkg{
@@ -93,7 +93,7 @@ pub fn build(b: *Builder) void {
 
     const event_system_pkg = std.build.Pkg{
         .name = "event_system",
-        .path = .{
+        .source = .{
             .path = lib_src_path ++ "event_system.zig",
         },
         .dependencies = &[_]Pkg{ constants_pkg, geometry_pkg, graphics_pkg, memory_pkg },
@@ -101,7 +101,7 @@ pub fn build(b: *Builder) void {
 
     const audio_pkg = std.build.Pkg{
         .name = "audio",
-        .path = .{
+        .source = .{
             .path = lib_src_path ++ "audio.zig",
         },
         .dependencies = &[_]Pkg{
@@ -117,7 +117,7 @@ pub fn build(b: *Builder) void {
 
     const gui_pkg = std.build.Pkg{
         .name = "gui",
-        .path = .{
+        .source = .{
             .path = lib_src_path ++ "gui.zig",
         },
         .dependencies = &[_]Pkg{
@@ -133,7 +133,7 @@ pub fn build(b: *Builder) void {
 
     const playlist_pkg = std.build.Pkg{
         .name = "Playlist",
-        .path = .{
+        .source = .{
             .path = app_src_path ++ "Playlist.zig",
         },
         .dependencies = &[_]Pkg{
@@ -146,7 +146,7 @@ pub fn build(b: *Builder) void {
 
     const ui_pkg = std.build.Pkg{
         .name = "ui",
-        .path = .{
+        .source = .{
             .path = app_src_path ++ "ui.zig",
         },
         .dependencies = &[_]Pkg{
@@ -164,7 +164,7 @@ pub fn build(b: *Builder) void {
 
     const glfw_pkg = std.build.Pkg{
         .name = "glfw",
-        .path = .{
+        .source = .{
             .path = app_src_path ++ "glfw_bindings.zig",
         },
         .dependencies = &[_]Pkg{ geometry_pkg, vulkan_pkg },
@@ -172,7 +172,7 @@ pub fn build(b: *Builder) void {
 
     const vulkan_config_pkg = std.build.Pkg{
         .name = "vulkan_config",
-        .path = .{
+        .source = .{
             .path = app_src_path ++ "vulkan_config.zig",
         },
         .dependencies = &[_]Pkg{vulkan_pkg},
@@ -180,7 +180,7 @@ pub fn build(b: *Builder) void {
 
     const user_config_pkg = std.build.Pkg{
         .name = "user_config",
-        .path = .{
+        .source = .{
             .path = app_src_path ++ "user_config.zig",
         },
         .dependencies = &[_]Pkg{graphics_pkg},
@@ -188,7 +188,7 @@ pub fn build(b: *Builder) void {
 
     const vulkan_wrapper_pkg = std.build.Pkg{
         .name = "vulkan_wrapper",
-        .path = .{
+        .source = .{
             .path = lib_src_path ++ "vulkan_wrapper.zig",
         },
         .dependencies = &[_]Pkg{

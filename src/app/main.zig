@@ -1255,8 +1255,6 @@ fn update(allocator: Allocator, app: *GraphicsContext) !void {
     is_render_requested = true;
 
     std.log.info("Update completed", .{});
-
-    event_system.mouse_event_writer.print();
 }
 
 fn appLoop(allocator: Allocator, app: *GraphicsContext) !void {
