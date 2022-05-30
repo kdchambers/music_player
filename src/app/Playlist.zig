@@ -182,6 +182,22 @@ pub inline fn doPreviousTrackPlay() event_system.ActionIndex {
 fn playIndex(index: u16) void {
     std.debug.assert(index < storage_opt.?.entries().len);
 
+    if(audio.output.getState() != .stopped) {
+        audio.input_event_buffer.add(.stop_requested) catch |err| {
+            std.log.err("Failed to send stop_requested to audio module. Error -> {s}", .{err});
+            return;
+        };
+        const max_loop_count: u32 = 1000;
+        var i: u32 = 0;
+        while (audio.output.getState() != .stopped and i < max_loop_count) : (i += 1) {
+            std.time.sleep(std.time.ns_per_ms * 50);
+        }
+        if (i == max_loop_count) {
+            std.log.err("Failed to stop audio thread..", .{});
+            return;
+        }
+    }
+
     const absolute_path = storage_opt.?.entries()[index].absolutePathZ() catch |err| {
         std.log.err("Failed to create absolute path for playlist index {d}. Error -> {s}", .{ index, err });
         return;
