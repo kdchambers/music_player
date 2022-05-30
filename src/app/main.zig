@@ -30,7 +30,6 @@ const audio = @import("audio");
 const user_config = @import("user_config");
 const QuadFaceWriter = gui.QuadFaceWriter;
 const QuadFaceWriterPool = gui.QuadFaceWriterPool;
-const action = @import("action");
 const ui = @import("ui");
 const theme = @import("Theme.zig").default;
 const LibraryNavigator = @import("LibraryNavigator.zig");
@@ -1374,9 +1373,7 @@ fn swapTexture(app: *GraphicsContext) !void {
 
 // TODO: Rename act
 fn mouseButtonCallback(window: *glfw.Window, button: glfw.MouseButton, act: glfw.Action, mods: glfw.Mods) void {
-    _ = action;
     _ = mods;
-
     if (glfw.getCursorPos(window)) |cursor_position| {
         const half_width = @intToFloat(f32, screen_dimensions.width) / 2.0;
         const half_height = @intToFloat(f32, screen_dimensions.height) / 2.0;
