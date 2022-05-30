@@ -15,7 +15,6 @@ const ScreenPixelBaseType = @import("constants").ScreenPixelBaseType;
 const TexturePixelBaseType = @import("constants").TexturePixelBaseType;
 const GlyphSet = @import("text").GlyphSet;
 const event_system = @import("event_system");
-const LibraryNavigator = @import("LibraryNavigator");
 const audio = @import("audio");
 const memory = @import("memory");
 const navigation = @import("navigation.zig").navigation;

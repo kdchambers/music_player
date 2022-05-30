@@ -7,7 +7,7 @@ const std = @import("std");
 const builtin = @import("builtin");
 const Allocator = std.mem.Allocator;
 const vk = @import("vulkan");
-const vulkan_config = @import("vulkan_config");
+const vulkan_config = @import("vulkan_config.zig");
 const glfw = @import("glfw");
 const text = @import("text");
 const gui = @import("gui");
@@ -204,7 +204,7 @@ pub fn main() !void {
 
     std.debug.assert(window_size.width < 10_000 and window_size.height < 10_000);
 
-    graphics_context.base_dispatch = try BaseDispatch.load(glfw.glfwGetInstanceProcAddress);
+    graphics_context.base_dispatch = try vulkan_config.BaseDispatch.load(glfw.glfwGetInstanceProcAddress);
 
     var instance_extension_count: u32 = 0;
     const instance_extensions = glfw.getRequiredInstanceExtensions(&instance_extension_count);
@@ -229,7 +229,7 @@ pub fn main() !void {
         .flags = .{},
     }, null);
 
-    graphics_context.instance_dispatch = try InstanceDispatch.load(graphics_context.instance, glfw.glfwGetInstanceProcAddress);
+    graphics_context.instance_dispatch = try vulkan_config.InstanceDispatch.load(graphics_context.instance, glfw.glfwGetInstanceProcAddress);
     errdefer graphics_context.instance_dispatch.destroyInstance(graphics_context.instance, null);
 
     _ = try glfw.createWindowSurface(graphics_context.instance, graphics_context.window, &graphics_context.surface);
@@ -257,11 +257,11 @@ pub fn main() !void {
         // defer allocator.free(physical_devices);
 
         for (physical_devices) |physical_device| {
-            if ((try zvk.deviceSupportsExtensions(InstanceDispatch, graphics_context.instance_dispatch, allocator, physical_device, device_extensions[0..])) and
-                (try zvk.getPhysicalDeviceSurfaceFormatsKHRCount(InstanceDispatch, graphics_context.instance_dispatch, physical_device, graphics_context.surface)) != 0 and
-                (try zvk.getPhysicalDeviceSurfacePresentModesKHRCount(InstanceDispatch, graphics_context.instance_dispatch, physical_device, graphics_context.surface)) != 0)
+            if ((try zvk.deviceSupportsExtensions(vulkan_config.InstanceDispatch, graphics_context.instance_dispatch, allocator, physical_device, device_extensions[0..])) and
+                (try zvk.getPhysicalDeviceSurfaceFormatsKHRCount(vulkan_config.InstanceDispatch, graphics_context.instance_dispatch, physical_device, graphics_context.surface)) != 0 and
+                (try zvk.getPhysicalDeviceSurfacePresentModesKHRCount(vulkan_config.InstanceDispatch, graphics_context.instance_dispatch, physical_device, graphics_context.surface)) != 0)
             {
-                var supported_present_modes = try zvk.getPhysicalDeviceSurfacePresentModesKHR(InstanceDispatch, graphics_context.instance_dispatch, allocator, physical_device, graphics_context.surface);
+                var supported_present_modes = try zvk.getPhysicalDeviceSurfacePresentModesKHR(vulkan_config.InstanceDispatch, graphics_context.instance_dispatch, allocator, physical_device, graphics_context.surface);
                 defer allocator.free(supported_present_modes);
 
                 // FIFO should be guaranteed by vulkan spec but validation layers are triggered
@@ -401,7 +401,7 @@ pub fn main() !void {
         );
     }
 
-    graphics_context.device_dispatch = try DeviceDispatch.load(
+    graphics_context.device_dispatch = try vulkan_config.DeviceDispatch.load(
         graphics_context.logical_device,
         graphics_context.instance_dispatch.dispatch.vkGetDeviceProcAddr,
     );
@@ -412,7 +412,7 @@ pub fn main() !void {
     );
 
     var available_formats: []vk.SurfaceFormatKHR = try zvk.getPhysicalDeviceSurfaceFormatsKHR(
-        InstanceDispatch,
+        vulkan_config.InstanceDispatch,
         graphics_context.instance_dispatch,
         allocator,
         graphics_context.physical_device,
@@ -498,7 +498,7 @@ fn recreateSwapchain(allocator: Allocator, app: *GraphicsContext) !void {
 
     // TODO
     const available_formats: []vk.SurfaceFormatKHR = try zvk.getPhysicalDeviceSurfaceFormatsKHR(
-        InstanceDispatch,
+        vulkan_config.InstanceDispatch,
         app.instance_dispatch,
         allocator,
         app.physical_device,
@@ -813,7 +813,7 @@ fn setupApplication(allocator: Allocator, app: *GraphicsContext) !void {
         .queue_family_index = app.graphics_present_queue_index,
     }, null);
 
-    var command_buffer = try zvk.allocateCommandBuffer(DeviceDispatch, app.device_dispatch, app.logical_device, vk.CommandBufferAllocateInfo{
+    var command_buffer = try zvk.allocateCommandBuffer(vulkan_config.DeviceDispatch, app.device_dispatch, app.logical_device, vk.CommandBufferAllocateInfo{
         .s_type = vk.StructureType.command_buffer_allocate_info,
         .p_next = null,
         .level = .primary,
@@ -1045,7 +1045,7 @@ fn setupApplication(allocator: Allocator, app: *GraphicsContext) !void {
         .p_next = null,
     }, null);
 
-    app.swapchain_images = try zvk.getSwapchainImagesKHR(DeviceDispatch, app.device_dispatch, allocator, app.logical_device, app.swapchain);
+    app.swapchain_images = try zvk.getSwapchainImagesKHR(vulkan_config.DeviceDispatch, app.device_dispatch, allocator, app.logical_device, app.swapchain);
 
     std.log.info("Swapchain images: {d}", .{app.swapchain_images.len});
 
@@ -1818,96 +1818,10 @@ fn renderFrame(allocator: Allocator, app: *GraphicsContext) !void {
     current_frame = (current_frame + 1) % max_frames_in_flight;
 }
 
-const BaseDispatch = vk.BaseWrapper(.{
-    .createInstance = true,
-});
-
-const InstanceDispatch = vk.InstanceWrapper(.{
-    .destroyInstance = true,
-    .createDevice = true,
-    .destroySurfaceKHR = true,
-    .enumeratePhysicalDevices = true,
-    .getPhysicalDeviceProperties = true,
-    .enumerateDeviceExtensionProperties = true,
-    .getPhysicalDeviceSurfaceFormatsKHR = true,
-    .getPhysicalDeviceSurfacePresentModesKHR = true,
-    .getPhysicalDeviceSurfaceCapabilitiesKHR = true,
-    .getPhysicalDeviceQueueFamilyProperties = true,
-    .getPhysicalDeviceSurfaceSupportKHR = true,
-    .getPhysicalDeviceMemoryProperties = true,
-    .getDeviceProcAddr = true,
-});
-
-const DeviceDispatch = vk.DeviceWrapper(.{
-    .destroyDevice = true,
-    .getDeviceQueue = true,
-    .createSemaphore = true,
-    .createFence = true,
-    .createImageView = true,
-    .destroyImageView = true,
-    .destroySemaphore = true,
-    .destroyFence = true,
-    .getSwapchainImagesKHR = true,
-    .createSwapchainKHR = true,
-    .destroySwapchainKHR = true,
-    .acquireNextImageKHR = true,
-    .deviceWaitIdle = true,
-    .waitForFences = true,
-    .resetFences = true,
-    .queueSubmit = true,
-    .queuePresentKHR = true,
-    .createCommandPool = true,
-    .destroyCommandPool = true,
-    .allocateCommandBuffers = true,
-    .freeCommandBuffers = true,
-    .queueWaitIdle = true,
-    .createShaderModule = true,
-    .destroyShaderModule = true,
-    .createPipelineLayout = true,
-    .destroyPipelineLayout = true,
-    .createRenderPass = true,
-    .destroyRenderPass = true,
-    .createGraphicsPipelines = true,
-    .destroyPipeline = true,
-    .createFramebuffer = true,
-    .destroyFramebuffer = true,
-    .beginCommandBuffer = true,
-    .endCommandBuffer = true,
-    .allocateMemory = true,
-    .freeMemory = true,
-    .createBuffer = true,
-    .destroyBuffer = true,
-    .getBufferMemoryRequirements = true,
-    .mapMemory = true,
-    .unmapMemory = true,
-    .bindBufferMemory = true,
-    .cmdBeginRenderPass = true,
-    .cmdEndRenderPass = true,
-    .cmdBindPipeline = true,
-    .cmdDraw = true,
-    .cmdSetViewport = true,
-    .cmdSetScissor = true,
-    .cmdBindVertexBuffers = true,
-    .cmdCopyBuffer = true,
-    .cmdDrawIndexed = true,
-    .createImage = true,
-    .getImageMemoryRequirements = true,
-    .bindImageMemory = true,
-    .cmdPipelineBarrier = true,
-    .createDescriptorSetLayout = true,
-    .createDescriptorPool = true,
-    .allocateDescriptorSets = true,
-    .createSampler = true,
-    .updateDescriptorSets = true,
-    .resetCommandPool = true,
-    .cmdBindIndexBuffer = true,
-    .cmdBindDescriptorSets = true,
-});
-
 const GraphicsContext = struct {
-    base_dispatch: BaseDispatch,
-    instance_dispatch: InstanceDispatch,
-    device_dispatch: DeviceDispatch,
+    base_dispatch: vulkan_config.BaseDispatch,
+    instance_dispatch: vulkan_config.InstanceDispatch,
+    device_dispatch: vulkan_config.DeviceDispatch,
 
     window: *glfw.Window,
     vertex_shader_module: vk.ShaderModule,
