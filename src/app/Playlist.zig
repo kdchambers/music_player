@@ -180,7 +180,6 @@ pub inline fn doPreviousTrackPlay() event_system.ActionIndex {
 }
 
 fn playIndex(index: u16) void {
-    std.log.info("Index: {d}", .{index});
     std.debug.assert(index < storage_opt.?.entries().len);
 
     const absolute_path = storage_opt.?.entries()[index].absolutePathZ() catch |err| {

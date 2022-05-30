@@ -245,97 +245,6 @@ const DrawReceipt = struct {
 
 pub const Alignment = enum { left, right, center };
 
-// I think have a multiple action is a better idea
-// You can also have a custom action
-
-// const VerticalDrawList = struct {
-// const Self = @This();
-// extent: geometry.Extent2D(ScreenNormalizedBaseType),
-// item_extent: geometry.Extent2D(ScreenNormalizedBaseType),
-// item_outer_margin: f32,
-// horizontal_inner_gap: f32,
-// vertical_inner_gap: f32,
-
-// pub fn generate(
-// comptime VertexType: type,
-// face_writer: *QuadFaceWriter(VertexType),
-// track_title_list: []const []const u8,
-// glyph_set: text.GlyphSet,
-// scale_factor: geometry.ScaleFactor2D(ScreenNormalizedBaseType),
-// background_color: Color,
-// text_color: Color,
-// ) !void {
-// const track_item_background_color_index = color_list.append();
-// const track_item_on_hover_color_index = color_list.append(theme.track_background_hovered);
-
-// for (track_title_list) |track_title, track_index| {
-// const track_name = track_title; // track_metadata.title[0..track_metadata.title_length];
-
-// std.log.info("Track name: '{s}'", .{track_name});
-// std.debug.assert(track_name.len > 0);
-
-// const track_item_extent = geometry.Extent2D(ScreenNormalizedBaseType){
-// .x = -0.8,
-// .y = -0.6 + (@intToFloat(f32, track_index) * (30 * scale_factor.vertical)),
-// .width = 600 * scale_factor.horizontal,
-// .height = 30 * scale_factor.vertical,
-// };
-
-// const track_item_quad_index = face_writer.*.used;
-
-// const track_item_faces = try gui.button.generate(
-// GenericVertex,
-// face_writer,
-// glyph_set,
-// track_name,
-// track_item_extent,
-// scale_factor,
-// theme.track_background,
-// theme.track_text,
-// .left,
-// );
-// _ = track_item_faces;
-
-// const track_item_on_left_click_event_id = event_system.registerMouseLeftPressAction(track_item_extent);
-
-// const track_item_audio_play_action_payload = action.PayloadAudioPlay{
-// .id = @intCast(u16, track_index),
-// };
-
-// const track_item_audio_play_action = action.Action{ .action_type = .audio_play, .payload = .{ .audio_play = track_item_audio_play_action_payload } };
-// std.debug.assert(track_item_on_left_click_event_id == action.system_actions.append(track_item_audio_play_action));
-
-// // NOTE: system_actions needs to correspond to given on_hover_event_ids here
-// const track_item_on_hover_event_ids = event_system.registerMouseHoverReflexiveEnterAction(track_item_extent);
-
-// // Index of the quad face (I.e Mulples of 4 faces) within the face allocator
-// // const track_item_quad_index = calculateQuadIndex(vertices, track_item_faces);
-
-// const track_item_update_color_vertex_attachment_index = @intCast(u8, action.vertex_range_attachments.append(
-// .{ .vertex_begin = track_item_quad_index, .vertex_count = gui.button.face_count },
-// ));
-
-// const track_item_update_color_enter_action_payload = action.PayloadColorSet{
-// .vertex_range_begin = track_item_update_color_vertex_attachment_index,
-// .vertex_range_span = 1,
-// .color_index = @intCast(u8, track_item_on_hover_color_index),
-// };
-
-// const track_item_update_color_exit_action_payload = action.PayloadColorSet{
-// .vertex_range_begin = track_item_update_color_vertex_attachment_index,
-// .vertex_range_span = 1,
-// .color_index = @intCast(u8, track_item_background_color_index),
-// };
-
-// const track_item_update_color_enter_action = action.Action{ .action_type = .color_set, .payload = .{ .color_set = track_item_update_color_enter_action_payload } };
-// const track_item_update_color_exit_action = action.Action{ .action_type = .color_set, .payload = .{ .color_set = track_item_update_color_exit_action_payload } };
-
-// std.debug.assert(track_item_on_hover_event_ids[0] == action.system_actions.append(track_item_update_color_enter_action));
-// std.debug.assert(track_item_on_hover_event_ids[1] == action.system_actions.append(track_item_update_color_exit_action));
-// }
-// }
-// };
-
 pub const grid = struct {
     pub fn generate(
         comptime VertexType: type,
@@ -513,8 +422,6 @@ pub const button = struct {
             }};
 
             action_writer.onHoverReflexive(hover_enter_global_action[0..], hover_exit_global_action[0..]);
-            // action_writer.onHoverEnter(hover_enter_global_action[0..]);
-            // action_writer.onHoverExit(hover_exit_global_action[0..]);
         }
 
         const label_faces = try generateText(VertexType, face_writer, label, label_origin, scale_factor, glyph_set, label_color, null);

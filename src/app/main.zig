@@ -587,106 +587,12 @@ fn recreateSwapchain(allocator: Allocator, app: *GraphicsContext) !void {
     app.command_buffers = try allocateCommandBuffers(allocator, app.*, @intCast(u32, app.swapchain_images.len));
     try recordRenderPass(app.*, vertex_buffer_count * 6);
 
-    std.log.info("Swapchain recreated", .{});
 }
 
 fn setupApplication(allocator: Allocator, app: *GraphicsContext) !void {
-    // const large_image = try zigimg.Image.fromFilePath(allocator, "/home/keith/projects/zv_widgets_1/assets/pastal_castle.png");
-    // defer large_image.deinit();
-
-    // log.info("Load image format: {}", .{large_imageScreenPixelBaseType_format});
-    // const formatted_image: []RGBA(f32) = blk: {
-    // switch (large_imageScreenPixelBaseType_format) {
-    // .Rgba32 => break :blk try image.convertImageRgba32(allocator, large_imageScreenPixelBaseTypes.?.Rgba32),
-    // .Rgb24 => break :blk try image.convertImageRgb24(allocator, large_imageScreenPixelBaseTypes.?.Rgb24),
-    // // TODO: Handle this error properly
-    // else => unreachable,
-    // }
-    // unreachable;
-    // };
-    // defer allocator.free(formatted_image);
-
-    // const horizontal_difference: f32 = @intToFloat(f32, texture_layer_dimensions.width) / @intToFloat(f32, large_image.width);
-    // const vertical_difference: f32 = @intToFloat(f32, texture_layer_dimensions.height) / @intToFloat(f32, large_image.height);
-    // const scale_factor: f32 = if (horizontal_difference < vertical_difference) horizontal_difference else vertical_difference;
-
-    // const fitted_dimensions = geometry.Dimensions2D(TexturePixelBaseType){
-    // .width = 256, //if (scale_factor < 1.0) @floatToInt(u32, @intToFloat(f32, large_image.width) * scale_factor) else @intCast(u32, large_image.width),
-    // .height = 256, // if (scale_factor < 1.0) @floatToInt(u32, @intToFloat(f32, large_image.height) * scale_factor) else @intCast(u32, large_image.height),
-    // };
-
-    // const old_dimensions = geometry.Dimensions2D(TexturePixelBaseType){
-    // .width = @intCast(u32, large_image.width),
-    // .height = @intCast(u32, large_image.height),
-    // };
-
-    // TODO: I need to make a function to add and remove images as textures
-    // It will be able to return the texture dimensions so that it can be drawn seperately
-    // addTexture()
-
-    // log.info("Shrinking image: {d}x{d} --> {d}x{d}", .{ old_dimensions.width, old_dimensions.height, fitted_dimensions.width, fitted_dimensions.height });
-
-    // const fitted_image = try image.shrink(allocator, formatted_image, old_dimensions, fitted_dimensions);
-    // defer allocator.free(fitted_image);
-
-    // var texture_layer = try allocator.alloc(RGBA(f32), texture_layer_dimensions.width * texture_layer_dimensions.height);
-    // defer allocator.free(texture_layer);
-    // for (texture_layer) |ScreenPixelBaseType| {
-    //ScreenPixelBaseType.r = 1.0;
-    //ScreenPixelBaseType.g = 1.0;
-    //ScreenPixelBaseType.b = 1.0;
-    //ScreenPixelBaseType.a = 1.0;
-    // }
-
-    // assert(fitted_image.len == (fitted_dimensions.width * fitted_dimensions.height));
-
-    // const image_crop_dimensions = geometry.Extent2D(TexturePixelBaseType){
-    // .x = 0,
-    // .y = 0,
-    // .width = 100,
-    // .height = 170,
-    // };
-
-    // const image_initial_dimensions = geometry.Dimensions2D(TexturePixelBaseType){
-    // .width = @intCast(u32, large_image.width),
-    // .height = @intCast(u32, large_image.height),
-    // };
-
-    // const processed_image = try shrinkImage(allocator, _converted_image, image_initial_dimensions, .{ .width = large_image.width, .height = large_image.height });
-    // defer allocator.free(processed_image);
 
     const font_texture_chars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!\"£$%^&*()-_=+[]{};:'@#~,<.>/?\\|";
     glyph_set = try text.createGlyphSet(allocator, constants.default_font_path, font_texture_chars[0..], texture_layer_dimensions);
-
-    //
-    // TODO
-    //
-
-    // var debugging_font_bitmap_texture = try allocator.alloc(RGBA(f32), texture_layer_dimensions.width * texture_layer_dimensions.height);
-    // defer allocator.free(debugging_font_bitmap_texture);
-
-    // {
-    // const source_image_extent = geometry.Extent2D(TexturePixelBaseType){
-    // .x = 0,
-    // .y = 0,
-    // .width = @intCast(u32, fitted_dimensions.width),
-    // .height = @intCast(u32, fitted_dimensions.height),
-    // };
-
-    // log.info("Image dimensions: {d}x{d}", .{ large_image.width, large_image.height });
-
-    // const destination_placement = geometry.Coordinates2D(TexturePixelBaseType){
-    // .x = 0,
-    // .y = 0,
-    // };
-
-    // const destination_dimensions = geometry.Dimensions2D(TexturePixelBaseType){
-    // .width = texture_layer_dimensions.width,
-    // .height = texture_layer_dimensions.height,
-    // };
-
-    // image.copy(RGBA(f32), fitted_image, source_image_extent, &texture_layer, destination_placement, destination_dimensions);
-    // }
 
     const memory_properties = app.instance_dispatch.getPhysicalDeviceMemoryProperties(app.physical_device);
     // var memory_properties = zvk.getDevicePhysicalMemoryProperties(app.physical_device);
@@ -745,29 +651,6 @@ fn setupApplication(allocator: Allocator, app: *GraphicsContext) !void {
 
     var texture_width: u32 = glyph_set.width();
     var texture_height: u32 = glyph_set.height();
-
-    std.log.info("Glyph dimensions: {}x{}", .{ texture_width, texture_height });
-
-    // const font_bitmap_extent = geometry.Extent2D(TexturePixelBaseType){
-    // .x = 0,
-    // .y = 0,
-    // .width = texture_width,
-    // .height = texture_height,
-    // };
-
-    // const formatted_image_dimensions = geometry.Dimensions2D(TexturePixelBaseType){
-    // .width = @intCast(u32, large_image.width),
-    // .height = @intCast(u32, large_image.height),
-    // };
-
-    // const cropped_image = try cropImage(allocator, formatted_image, formatted_image_dimensions, font_bitmap_extent);
-    // defer allocator.free(cropped_image);
-
-    // texture_size_bytes = glyph_set.image.len * @sizeOf(RGBA(f32));
-    // texture_size_bytes = texture_dimensions.height * texture_dimensions.width * @sizeOf(RGBA(f32));
-    // assert(glyph_set.image.len == (texture_width * texture_height));
-
-    // assert(texture_size_bytes == (texture_width * texture_height * @sizeOf(RGBA(f32))));
 
     {
         const image_create_info = vk.ImageCreateInfo{
@@ -970,7 +853,6 @@ fn setupApplication(allocator: Allocator, app: *GraphicsContext) !void {
         const dependency_flags = vk.DependencyFlags{};
         app.device_dispatch.cmdPipelineBarrier(command_buffer, src_stage, dst_stage, dependency_flags, 0, undefined, 0, undefined, 1, &barrier);
     }
-    // }
 
     try app.device_dispatch.endCommandBuffer(command_buffer);
 
@@ -1006,11 +888,7 @@ fn setupApplication(allocator: Allocator, app: *GraphicsContext) !void {
     const surface_capabilities: vk.SurfaceCapabilitiesKHR = try app.instance_dispatch.getPhysicalDeviceSurfaceCapabilitiesKHR(app.physical_device, app.surface);
 
     if (surface_capabilities.current_extent.width == 0xFFFFFFFF or surface_capabilities.current_extent.height == 0xFFFFFFFF) {
-        std.log.info("Getting framebuffer size", .{});
-
         const window_size = glfw.getFramebufferSize(app.window);
-        std.log.info("Screen size: {d}x{d}", .{ window_size.width, window_size.height });
-
         std.debug.assert(window_size.width < 10_000 and window_size.height < 10_000);
 
         if (window_size.width <= 0 or window_size.height <= 0) {
@@ -1046,8 +924,6 @@ fn setupApplication(allocator: Allocator, app: *GraphicsContext) !void {
     }, null);
 
     app.swapchain_images = try zvk.getSwapchainImagesKHR(vulkan_config.DeviceDispatch, app.device_dispatch, allocator, app.logical_device, app.swapchain);
-
-    std.log.info("Swapchain images: {d}", .{app.swapchain_images.len});
 
     // TODO: Duplicated code
     app.swapchain_image_views = try allocator.alloc(vk.ImageView, app.swapchain_images.len);
@@ -1127,9 +1003,6 @@ fn setupApplication(allocator: Allocator, app: *GraphicsContext) !void {
         texture_indices_buffer = try app.device_dispatch.createBuffer(app.logical_device, &buffer_create_info, null);
         try app.device_dispatch.bindBufferMemory(app.logical_device, texture_indices_buffer, mesh_memory, indices_range_index_begin);
     }
-
-    // texture_vertices_buffer = try zvk.createBufferOnMemory(app.logical_device, vertices_range_size, vertices_range_index_begin, .{ .transferDst = true, .vertexBuffer = true }, mesh_memory);
-    // texture_indices_buffer = try zvk.createBufferOnMemory(app.logical_device, indices_range_size, indices_range_index_begin, .{ .transferDst = true, .indexBuffer = true }, mesh_memory);
 
     mapped_device_memory = @ptrCast([*]u8, (try app.device_dispatch.mapMemory(app.logical_device, mesh_memory, 0, memory_size, .{})).?);
 
@@ -1215,162 +1088,6 @@ fn setupApplication(allocator: Allocator, app: *GraphicsContext) !void {
     app.framebuffers = try createFramebuffers(allocator, app.*);
 }
 
-fn swapTexture(app: *GraphicsContext) !void {
-    std.log.info("SwapTexture begin", .{});
-
-    const command_pool = try zvk.createCommandPool(app.logical_device, vk.CommandPoolCreateInfo{
-        .s_type = vk.StructureType.COMMAND_POOL_CREATE_INFO,
-        .p_next = null,
-        .flags = .{ .resetCommandBuffer = true },
-        .queueFamilyIndex = app.graphics_present_queue_index,
-    });
-
-    {
-        var command_buffer = try zvk.allocateCommandBuffer(app.logical_device, vk.CommandBufferAllocateInfo{
-            .s_type = vk.StructureType.COMMAND_BUFFER_ALLOCATE_INFO,
-            .p_next = null,
-            .level = .PRIMARY,
-            .commandPool = command_pool,
-            .commandBufferCount = 1,
-        });
-
-        try zvk.beginCommandBuffer(command_buffer, .{
-            .s_type = vk.StructureType.COMMAND_BUFFER_BEGIN_INFO,
-            .p_next = null,
-            .flags = .{ .oneTimeSubmit = true },
-            .pInheritanceInfo = null,
-        });
-
-        {
-            const barrier = [_]vk.ImageMemoryBarrier{
-                .{
-                    .s_type = vk.StructureType.IMAGE_MEMORY_BARRIER,
-                    .p_next = null,
-                    .srcAccessMask = .{},
-                    .dstAccessMask = .{ .shaderRead = true },
-                    .oldLayout = .SHADER_READ_ONLY_OPTIMAL,
-                    .newLayout = .GENERAL,
-                    .srcQueueFamilyIndex = vk.QUEUE_FAMILY_IGNORED,
-                    .dstQueueFamilyIndex = vk.QUEUE_FAMILY_IGNORED,
-                    .image = texture_image,
-                    .subresourceRange = .{
-                        .aspectMask = .{ .color = true },
-                        .baseMipLevel = 0,
-                        .levelCount = 1,
-                        .baseArrayLayer = 0,
-                        .layerCount = 2,
-                    },
-                },
-            };
-
-            const src_stage = @bitCast(u32, vk.PipelineStageFlags{ .topOfPipe = true });
-            const dst_stage = @bitCast(u32, vk.PipelineStageFlags{ .fragmentShader = true });
-            vk.vkCmdPipelineBarrier(command_buffer, src_stage, dst_stage, 0, 0, undefined, 0, undefined, 1, &barrier);
-        }
-
-        try app.device_dispatch.endCommandBuffer(command_buffer);
-
-        // try zvk.endCommandBuffer(command_buffer);
-
-        const submit_command_infos = [_]vk.SubmitInfo{.{
-            .s_type = vk.StructureType.SUBMIT_INFO,
-            .p_next = null,
-            .waitSemaphoreCount = 0,
-            .pWaitSemaphores = undefined,
-            .pWaitDstStageMask = undefined,
-            .commandBufferCount = 1,
-            .pCommandBuffers = @ptrCast([*]vk.CommandBuffer, &command_buffer),
-            .signalSemaphoreCount = 0,
-            .pSignalSemaphores = undefined,
-        }};
-
-        if (.success != vk.vkQueueSubmit(app.graphics_present_queue, 1, &submit_command_infos, null)) {
-            return error.QueueSubmitFailed;
-        }
-
-        if (vk.vkDeviceWaitIdle(app.logical_device) != .success) {
-            return error.DeviceWaitIdleFailed;
-        }
-
-        std.log.info("SwapTexture copy", .{});
-
-        // TODO
-        const second_image: []RGBA(f32) = undefined;
-        @memcpy(image_memory_map + texture_size_bytes, @ptrCast([*]u8, second_image.?), texture_size_bytes);
-    }
-
-    std.log.info("SwapTexture end", .{});
-
-    {
-        var command_buffer = try zvk.allocateCommandBuffer(app.logical_device, vk.CommandBufferAllocateInfo{
-            .s_type = vk.StructureType.COMMAND_BUFFER_ALLOCATE_INFO,
-            .p_next = null,
-            .level = .PRIMARY,
-            .commandPool = command_pool,
-            .commandBufferCount = 1,
-        });
-
-        try zvk.beginCommandBuffer(command_buffer, .{
-            .s_type = vk.StructureType.COMMAND_BUFFER_BEGIN_INFO,
-            .p_next = null,
-            .flags = .{ .oneTimeSubmit = true },
-            .pInheritanceInfo = null,
-        });
-
-        {
-            const barrier = [_]vk.ImageMemoryBarrier{
-                .{
-                    .s_type = vk.StructureType.IMAGE_MEMORY_BARRIER,
-                    .p_next = null,
-                    .srcAccessMask = .{},
-                    .dstAccessMask = .{ .shaderRead = true },
-                    .oldLayout = .GENERAL,
-                    .newLayout = .SHADER_READ_ONLY_OPTIMAL,
-                    .srcQueueFamilyIndex = vk.QUEUE_FAMILY_IGNORED,
-                    .dstQueueFamilyIndex = vk.QUEUE_FAMILY_IGNORED,
-                    .image = texture_image,
-                    .subresourceRange = .{
-                        .aspectMask = .{ .color = true },
-                        .baseMipLevel = 0,
-                        .levelCount = 1,
-                        .baseArrayLayer = 0,
-                        .layerCount = 2,
-                    },
-                },
-            };
-
-            const src_stage = @bitCast(u32, vk.PipelineStageFlags{ .topOfPipe = true });
-            const dst_stage = @bitCast(u32, vk.PipelineStageFlags{ .fragmentShader = true });
-            vk.vkCmdPipelineBarrier(command_buffer, src_stage, dst_stage, 0, 0, undefined, 0, undefined, 1, &barrier);
-        }
-
-        try app.device_dispatch.endCommandBuffer(command_buffer);
-
-        // try zvk.endCommandBuffer(command_buffer);
-
-        const submit_command_infos = [_]vk.SubmitInfo{.{
-            .s_type = vk.StructureType.SUBMIT_INFO,
-            .p_next = null,
-            .waitSemaphoreCount = 0,
-            .pWaitSemaphores = undefined,
-            .pWaitDstStageMask = undefined,
-            .commandBufferCount = 1,
-            .pCommandBuffers = @ptrCast([*]vk.CommandBuffer, &command_buffer),
-            .signalSemaphoreCount = 0,
-            .pSignalSemaphores = undefined,
-        }};
-
-        if (.success != vk.vkQueueSubmit(app.graphics_present_queue, 1, &submit_command_infos, null)) {
-            return error.QueueSubmitFailed;
-        }
-
-        if (vk.vkDeviceWaitIdle(app.logical_device) != .success) {
-            return error.DeviceWaitIdleFailed;
-        }
-    }
-}
-
-// TODO: Rename act
 fn mouseButtonCallback(window: *glfw.Window, button: glfw.MouseButton, act: glfw.Action, mods: glfw.Mods) void {
     _ = mods;
     if (glfw.getCursorPos(window)) |cursor_position| {
@@ -1428,8 +1145,6 @@ fn update(allocator: Allocator, app: *GraphicsContext) !void {
 
     _ = app;
     _ = allocator;
-
-    std.log.info("Update called", .{});
 
     std.debug.assert(screen_dimensions.width > 0);
     std.debug.assert(screen_dimensions.height > 0);

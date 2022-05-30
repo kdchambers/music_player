@@ -269,9 +269,3 @@ pub fn createGlyphSet(
     return glyph_set;
 }
 
-// pub fn writeText(face_allocator: Allocator, glyph_set: GlyphSet, placement: geometry.Coordinates2D(.ndc_right), scale_factor: ScaleFactor2D, text: []const u8) ![]QuadFace(GenericVertex) {
-// // TODO: Don't hardcode line height to XX pixels
-// const line_height = 18.0 * scale_factor.vertical;
-// const color = RGBA(f32){ .r = 0.8, .g = 0.2, .b = 0.7, .a = 1.0 };
-// return try gui.generateText(GenericVertex, face_allocator, text, placement, scale_factor, glyph_set, color, line_height);
-// }
