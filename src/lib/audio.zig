@@ -109,6 +109,7 @@ pub const AudioEvent = enum(u8) {
 pub const InputEvent = enum(u8) {
     deinitialization_requested,
     play_requested,
+    resume_requested,
     stop_requested,
     pause_requested,
     audio_source_changed,
@@ -690,8 +691,19 @@ pub const mp3 = struct {
         while (sample_index < samples_count) : (sample_index += 1) {
             for (input_event_buffer.collect()) |event| {
                 switch (event) {
-                    .stop_requested => return mad.MAD_FLOW_STOP,
-                    .pause_requested => output.playback_state = .paused,
+                    .stop_requested => {
+                        output.playback_state = .stopped;
+                        output_event_buffer.add(.stopped) catch |err| {
+                            std.log.err("Failed to add .stopped event to audio message queue. Error -> {s}", .{err});
+                        };
+                        return mad.MAD_FLOW_STOP;
+                    },
+                    .pause_requested => {
+                        output.playback_state = .paused;
+                        output_event_buffer.add(.paused) catch |err| {
+                            std.log.err("Failed to add .paused event to audio message queue. Error -> {s}", .{err});
+                        };
+                    },
                     .audio_source_changed => {
                         //
                     },
@@ -701,12 +713,21 @@ pub const mp3 = struct {
                 }
             }
 
-            const playback_state = output.getState();
-            while (playback_state == .paused) {
-                std.time.sleep(100000 * 1000);
+            while (output.getState() == .paused) {
+                std.time.sleep(std.time.ns_per_ms * 100);
+                for (input_event_buffer.collect()) |event| {
+                    if (event == .resume_requested) {
+                        output.playback_state = .playing;
+                        output_event_buffer.add(.resumed) catch |err| {
+                            std.log.err("Failed to add .resumed event. Error -> {s}", .{err});
+                        };
+                        break;
+                    }
+                }
                 continue;
             }
 
+            const playback_state = output.getState();
             if (playback_state == .stopped) {
                 return mad.MAD_FLOW_STOP;
             }
@@ -750,10 +771,10 @@ pub const mp3 = struct {
     pub fn calculateDurationSecondsFromFile(input_buffer: *[]const u8) u16 {
         var decoder: mad.mad_decoder = undefined;
         output.audio_duration = 0.0;
+        is_decoded = false;
         mad.mad_decoder_init(&decoder, @ptrCast(*anyopaque, input_buffer), inputCallback, headerCallback, null, null, errorCallback, null);
         _ = mad.mad_decoder_run(&decoder, mad.MAD_DECODER_MODE_SYNC);
         _ = mad.mad_decoder_finish(&decoder);
-        is_decoded = false;
         return @floatToInt(u16, output.audio_duration);
     }
 
@@ -762,11 +783,16 @@ pub const mp3 = struct {
         // Initial decode to read headers and calculate length
         output.audio_length = 0;
         output.audio_duration = 0;
+        is_decoded = false;
         const get_track_length_start_ts: i64 = std.time.milliTimestamp();
 
         mad.mad_decoder_init(&decoder, @ptrCast(*anyopaque, input_buffer), inputCallback, headerCallback, null, null, errorCallback, null);
-        _ = mad.mad_decoder_run(&decoder, mad.MAD_DECODER_MODE_SYNC);
-        _ = mad.mad_decoder_finish(&decoder);
+        if (mad.mad_decoder_run(&decoder, mad.MAD_DECODER_MODE_SYNC) != 0) {
+            std.log.warn("Issue running mad_decoder_run", .{});
+        }
+        if (mad.mad_decoder_finish(&decoder) != 0) {
+            std.log.warn("Issue running mad_decoder_finish", .{});
+        }
 
         // TODO: Don't hardcode these values
         output.audio_length = @floatToInt(u32, output.audio_duration * 2.0 * 2.0 * 44100.0);
@@ -787,25 +813,20 @@ pub const mp3 = struct {
         };
 
         output.playback_state = .playing;
-
         output_event_buffer.add(.started) catch |err| {
             log.err("Failed to add output event: {s}", .{err});
         };
 
-        event_system.internalEventHandle(.{ .subsystem = subsystem_index, .index = @intCast(event_system.ActionIndex, @enumToInt(AudioEvent.started)) });
+        // event_system.internalEventHandle(.{ .subsystem = subsystem_index, .index = @intCast(event_system.ActionIndex, @enumToInt(AudioEvent.started)) });
 
         mad.mad_decoder_init(&decoder, @ptrCast(*anyopaque, input_buffer), inputCallback, null, null, outputCallback, errorCallback, null);
         _ = mad.mad_decoder_run(&decoder, mad.MAD_DECODER_MODE_SYNC);
         _ = mad.mad_decoder_finish(&decoder);
 
         if (output.audio_index >= output.audio_length) {
+            std.log.info("Track finished naturally", .{});
             output_event_buffer.add(.finished) catch |err| {
                 std.log.err("Failed to add .finished Audio event : {s}", .{err});
-            };
-        } else {
-            std.log.info("Emitting .stopped event", .{});
-            output_event_buffer.add(.stopped) catch |err| {
-                std.log.err("Failed to add .stopped Audio event : {s}", .{err});
             };
         }
 

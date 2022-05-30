@@ -42,6 +42,8 @@ const Command = struct {
 
     const track_next: u8 = command_base_index + 0;
     const track_previous: u8 = command_base_index + 1;
+    const track_pause: u8 = command_base_index + 2;
+    const track_resume: u8 = command_base_index + 3;
 };
 
 pub const AudioDurationTime = struct {
@@ -68,6 +70,14 @@ pub fn secondsToAudioDurationTime(seconds: u16) AudioDurationTime {
         .seconds = current_seconds,
         .minutes = current_minutes,
     };
+}
+
+pub fn trackPause() !void {
+    try audio.input_event_buffer.add(.pause_requested);
+}
+
+pub fn trackResume() !void {
+    try audio.input_event_buffer.add(.resume_requested);
 }
 
 pub fn trackNext() !void {
@@ -122,6 +132,15 @@ pub fn trackPrevious() !void {
             };
 
             try audio.input_event_buffer.add(.stop_requested);
+            const max_loop_count: u32 = 1000;
+            var i: u32 = 0;
+            while (audio.output.getState() != .stopped and i < max_loop_count) : (i += 1) {
+                std.time.sleep(std.time.ns_per_ms * 50);
+            }
+            if (i == max_loop_count) {
+                std.log.err("Failed to stop audio thread..", .{});
+                return;
+            }
 
             audio.mp3.playFile(std.heap.c_allocator, absolute_path) catch |err| {
                 std.log.err("Failed to play track index {d} -> {s}", .{ new_track_index, err });
@@ -132,6 +151,14 @@ pub fn trackPrevious() !void {
             std.log.warn("Cannot invoke trackPrevious in inactive playlist", .{});
         }
     } else unreachable;
+}
+
+pub fn doTrackPause() event_system.ActionIndex {
+    return @intCast(event_system.ActionIndex, Command.track_pause);
+}
+
+pub fn doTrackResume() event_system.ActionIndex {
+    return @intCast(event_system.ActionIndex, Command.track_resume);
 }
 
 pub fn doPlayIndex(index: u16) event_system.ActionIndex {
@@ -182,6 +209,8 @@ pub fn doAction(index: event_system.ActionIndex) void {
         switch (index) {
             Command.track_next => trackNext() catch |err| std.log.err("Failed to play next track. Error -> {s}", .{err}),
             Command.track_previous => trackPrevious() catch |err| std.log.err("Failed to play previous track. Error -> {s}", .{err}),
+            Command.track_pause => trackPause() catch |err| std.log.err("Failed to pause track. Error -> {s}", .{err}),
+            Command.track_resume => trackResume() catch |err| std.log.err("Failed to resume track. Error -> {s}", .{err}),
             else => {
                 std.log.warn("Invalid action index in Playlist submodule", .{});
                 unreachable;
@@ -300,7 +329,7 @@ pub const Storage = struct {
         head.parent_path = try AbsolutePath.write(arena, source_parent_path, 256);
 
         var track_entries = arena.allocate(TrackEntry, max_entries);
-        head.track_list_index = arena.indexFor(@ptrCast(*u8, track_entries.ptr));
+        head.track_list_index = mini_addr.indexFor(arena, @ptrCast([*]const u8, track_entries.ptr)[0..1]);
 
         // Assert track_entries has alignment of 2
         std.debug.assert(@ptrToInt(track_entries.ptr) % 2 == 0);

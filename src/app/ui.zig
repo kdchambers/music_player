@@ -84,19 +84,72 @@ pub const playlist_buttons = struct {
                 .height = 20 * scale_factor.vertical,
             };
 
-            const media_button_paused_extent = geometry.Extent2D(ScreenNormalizedBaseType){
-                .x = media_button_placement.x,
-                .y = media_button_placement.y,
-                .width = media_button_paused_dimensions.width,
-                .height = media_button_paused_dimensions.height,
-            };
+            if (audio.output.getState() == .playing) {
+                const media_button_resumed_dimensions = geometry.Dimensions2D(ScreenNormalizedBaseType){
+                    .width = 4 * scale_factor.horizontal,
+                    .height = 16 * scale_factor.vertical,
+                };
 
-            // NOTE: Even though we only need one face to generate a triangle,
-            // we need to reserve a second for the resumed icon
-            var media_button_paused_faces = try face_writer.allocate(2);
+                const media_button_resumed_inner_gap: f32 = scale_factor.convertLength(.pixel, .ndc_right, .horizontal, 6);
+                // const media_button_resumed_x_offset: f32 = (media_button_resumed_inner_gap / 2.0);
 
-            media_button_paused_faces[0] = graphics.generateTriangleColoredRight(GenericVertex, media_button_paused_extent, theme.media_button);
-            media_button_paused_faces[1] = GenericVertex.nullFace();
+                const media_button_resumed_left_extent = geometry.Extent2D(ScreenNormalizedBaseType){
+                    .x = media_button_placement.x,
+                    .y = media_button_placement.y,
+                    .width = media_button_resumed_dimensions.width,
+                    .height = media_button_resumed_dimensions.height,
+                };
+
+                const media_button_resumed_right_extent = geometry.Extent2D(ScreenNormalizedBaseType){
+                    .x = media_button_placement.x + media_button_resumed_dimensions.width + media_button_resumed_inner_gap,
+                    .y = media_button_placement.y,
+                    .width = media_button_resumed_dimensions.width,
+                    .height = media_button_resumed_dimensions.height,
+                };
+
+                var playing_icon_faces = try face_writer.allocate(2);
+                playing_icon_faces[0] = graphics.generateQuadColored(GenericVertex, media_button_resumed_left_extent, theme.media_button, .bottom_left);
+                playing_icon_faces[1] = graphics.generateQuadColored(GenericVertex, media_button_resumed_right_extent, theme.media_button, .bottom_left);
+
+                const draw_region = geometry.Extent2D(ScreenNormalizedBaseType){
+                    .x = media_button_placement.x,
+                    .y = media_button_placement.y,
+                    .width = (media_button_resumed_dimensions.width * 2) + media_button_resumed_inner_gap,
+                    .height = media_button_resumed_dimensions.height,
+                };
+
+                var action_writer = event_system.mouse_event_writer.addExtent(draw_region);
+                const on_click_action = event_system.SubsystemActionIndex{
+                    .subsystem = Playlist.subsystem_index,
+                    .index = Playlist.doTrackPause(),
+                };
+
+                action_writer.onClickLeft(@ptrCast([*]const event_system.SubsystemActionIndex, &on_click_action)[0..1]);
+            } else {
+                const media_button_paused_extent = geometry.Extent2D(ScreenNormalizedBaseType){
+                    .x = media_button_placement.x,
+                    .y = media_button_placement.y,
+                    .width = media_button_paused_dimensions.width,
+                    .height = media_button_paused_dimensions.height,
+                };
+
+                // NOTE: Even though we only need one face to generate a triangle,
+                // we need to reserve a second for the resumed icon
+                var media_button_paused_faces = try face_writer.allocate(2);
+
+                media_button_paused_faces[0] = graphics.generateTriangleColoredRight(GenericVertex, media_button_paused_extent, theme.media_button);
+                media_button_paused_faces[1] = GenericVertex.nullFace();
+
+                if (audio.output.getState() == .paused) {
+                    var action_writer = event_system.mouse_event_writer.addExtent(media_button_paused_extent);
+                    const on_click_action = event_system.SubsystemActionIndex{
+                        .subsystem = Playlist.subsystem_index,
+                        .index = Playlist.doTrackResume(),
+                    };
+
+                    action_writer.onClickLeft(@ptrCast([*]const event_system.SubsystemActionIndex, &on_click_action)[0..1]);
+                }
+            }
         }
     };
 
@@ -235,13 +288,6 @@ pub const track_view = struct {
             .height = scale_factor.convertLength(.pixel, .ndc_right, .vertical, draw_region.height),
         };
 
-        const active_track_background_color = graphics.RGBA(f32){
-            .r = 0.7,
-            .g = 0.5,
-            .b = 0.3,
-            .a = 1.0,
-        };
-
         const active_track_index_opt = blk: {
             if (Playlist.current_track_index_opt) |current_track_index| {
                 if (navigation.isPlaylistAlsoTrackview()) {
@@ -251,14 +297,7 @@ pub const track_view = struct {
             break :blk null;
         };
 
-        const background_color = graphics.RGBA(f32){
-            .r = 0.6,
-            .g = 0.4,
-            .b = 0.6,
-            .a = 1.0,
-        };
-
-        (try face_writer.create()).* = graphics.generateQuadColored(GenericVertex, draw_region_normalized, background_color, .top_left);
+        (try face_writer.create()).* = graphics.generateQuadColored(GenericVertex, draw_region_normalized, theme.trackview_background, .top_left);
 
         // TODO: Remove sanity checks when more stable
         std.debug.assert(model_interface.entries().len < 20);
@@ -306,10 +345,10 @@ pub const track_view = struct {
             const track_background_color = blk: {
                 if (active_track_index_opt) |active_track_index| {
                     if (active_track_index == track_index) {
-                        break :blk active_track_background_color;
+                        break :blk theme.active_track_background;
                     }
                 }
-                break :blk theme.track_background;
+                break :blk theme.trackview_background;
             };
 
             const track_item_faces = try gui.button.generate(
@@ -487,9 +526,9 @@ pub const directory_up_button = struct {
         theme: Theme,
     ) !void {
         const button_extent = geometry.Extent2D(ScreenNormalizedBaseType){
-            .x = -0.95,
+            .x = -0.98,
             .y = -0.78,
-            .width = 50 * scale_factor.horizontal,
+            .width = 40 * scale_factor.horizontal,
             .height = 25 * scale_factor.vertical,
         };
 
@@ -563,16 +602,9 @@ pub const progress_bar = struct {
     var stored_forground_color: graphics.RGBA(f32) = undefined;
     var stored_update_event_id: u16 = 0;
 
-    const Config = struct {
-        progress_bar_update_interval_milliseconds: u32 = 200,
-        background_color: graphics.RGBA(f32) = undefined,
-        foreground_color: graphics.RGBA(f32) = undefined,
-    };
-
     pub fn update() void {
         if (progress_bar_face_quad_opt) |progress_bar_face_quad| {
             const progress = audio.output.progress() catch 0.0;
-            // std.log.info("Progress bar update: {d}", .{progress});
             foreground.draw(progress_bar_face_quad, progress, stored_scale_factor.?, stored_forground_color);
         } else {
             std.log.warn("Cannot update progress bar: Hasn't been initially created", .{});

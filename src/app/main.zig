@@ -62,9 +62,10 @@ pub const log_level: std.log.Level = .info;
 var is_render_requested: bool = true;
 var is_draw_required: bool = true;
 
-var current_audio_index: u16 = 0;
 var quad_face_writer_pool: QuadFaceWriterPool(GenericVertex) = undefined;
+
 var main_arena: memory.LinearArena = .{};
+var trackview_arena: memory.LinearArena = undefined;
 
 const ScreenScaleFactor = graphics.ScreenScaleFactor(
     .{
@@ -138,30 +139,13 @@ var texture_image: vk.Image = undefined;
 var texture_vertices_buffer: vk.Buffer = undefined;
 var texture_indices_buffer: vk.Buffer = undefined;
 
-// TODO: Take library path as input
-//       Default to assets/example_library
-const help_message =
-    \\music_player [<options>] [<filename>]
-    \\options:
-    \\    --help: display this help message
-    \\
-;
-
 // NOTE: For development
 // const library_root_path = "../../../../mnt/data/media/music";
 
 // TODO: You can define this with a env variable
-// const library_root_path = "assets/example_library";
-const library_root_path = "../../../../mnt/wd_hdd/media/music";
-var library_navigator: LibraryNavigator = undefined;
-var audio_files: FixedBuffer([:0]const u8, 20) = undefined;
+const library_root_path = "assets/example_library";
 var image_memory_map: [*]u8 = undefined;
 var texture_size_bytes: usize = 0;
-var audio_progress_label_faces_quad_index: u16 = undefined;
-var audio_progress_bar_faces_quad_index: u16 = undefined;
-var media_button_toggle_audio_action_id: u32 = undefined;
-const parent_directory_id = std.math.maxInt(u16);
-var update_media_icon_action_id_opt: ?u32 = null;
 
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
@@ -186,8 +170,17 @@ pub fn main() !void {
     event_system.mouse_event_writer.init(&main_arena, 1024);
 
     {
+        const path_size_max: u32 = 256;
+        const loaded_directories_max: u32 = 32;
+        trackview_arena = main_arena.allocateChild(2, path_size_max * loaded_directories_max * 2);
+    }
+
+    {
         arena_checkpoints[@enumToInt(RewindLevel.directory_changed)] = main_arena.checkpoint();
-        const current_directory = try std.fs.cwd().openDir(library_root_path, .{ .iterate = true });
+        const current_directory = std.fs.cwd().openDir(library_root_path, .{ .iterate = true }) catch |err| {
+            std.log.err("Failed to open directory {s}. Error -> {s}", .{ library_root_path, err });
+            return;
+        };
         try navigation.init(&main_arena, current_directory);
     }
 
@@ -1151,7 +1144,7 @@ fn setupApplication(allocator: Allocator, app: *GraphicsContext) !void {
     {
         const vertices_base = @ptrCast([*]GenericVertex, &mapped_device_memory[vertices_range_index_begin]);
         const vertex_buffer_capacity = vertices_range_size / @sizeOf(GenericVertex);
-        gui.init(&main_arena, vertices_base[0..vertex_buffer_capacity]);
+        gui.init(vertices_base[0..vertex_buffer_capacity]);
     }
 
     // if (vk.vkMapMemory(app.logical_device, mesh_memory, 0, memory_size, 0, @ptrCast(**anyopaque, &mapped_device_memory)) != .success) {
@@ -1517,14 +1510,17 @@ fn update(allocator: Allocator, app: *GraphicsContext) !void {
     if (navigation.trackview_path_opt) |trackview_path| {
         const draw_region = geometry.Extent2D(ScreenPixelBaseType){
             .x = screen_dimensions.width - 400,
-            .y = 103,
+            .y = scale_factor.convertPoint(.ndc_right, .pixel, .{
+                .y = -0.8,
+                .x = 0.0,
+            }).y,
             .width = 400,
-            .height = 800,
+            .height = scale_factor.convertLength(.ndc_right, .pixel, .vertical, 1.6),
         };
 
         if (navigation.trackview_storage_opt == null) {
             std.debug.assert(false);
-            navigation.trackview_storage_opt = try Playlist.Storage.create(&main_arena, trackview_path, 0, 20);
+            navigation.trackview_storage_opt = try Playlist.Storage.create(&trackview_arena, trackview_path, 0, 20);
         }
 
         var trackview_path_buffer: [256]u8 = undefined;
@@ -1592,6 +1588,10 @@ fn appLoop(allocator: Allocator, app: *GraphicsContext) !void {
                     std.log.warn("Error playing next track in playlist -> {s}", .{err});
                 };
             }
+
+            if (event == .started or event == .paused or event == .stopped or event == .resumed) {
+                is_draw_required = true;
+            }
         }
 
         for (gui.message_queue.collect()) |message| {
@@ -1603,6 +1603,10 @@ fn appLoop(allocator: Allocator, app: *GraphicsContext) !void {
 
         // TODO: Remove
         for (Playlist.output_events.collect()) |event| {
+            if (event == .new_track_started) {
+                is_draw_required = true;
+            }
+
             if (event == .playlist_initialized) {
                 const origin_event = event_system.SubsystemEventIndex{
                     .subsystem = audio.subsystem_index,
@@ -1615,6 +1619,10 @@ fn appLoop(allocator: Allocator, app: *GraphicsContext) !void {
                 };
 
                 _ = event_system.internalEventsBind(.{ .origin = origin_event, .target = target_event });
+
+                // TODO: Should not require a redraw
+                // For the current track indicator
+                is_draw_required = true;
             }
         }
 
@@ -1634,14 +1642,14 @@ fn appLoop(allocator: Allocator, app: *GraphicsContext) !void {
                                 continue;
                             }
                         }
-                        navigation.trackview_storage_opt = try Playlist.Storage.create(&main_arena, trackview_path, 0, 20);
+                        navigation.trackview_storage_opt = try Playlist.Storage.create(&trackview_arena, trackview_path, 0, 20);
                         _ = try std.Thread.spawn(.{}, navigation.calculateDurationsWrapper, .{navigation.trackview_storage_opt.?});
                         is_draw_required = true;
                     }
                 },
                 .directory_changed => {
-                    const checkpoint_index = @enumToInt(RewindLevel.directory_changed);
-                    main_arena.rewindTo(@intCast(u16, arena_checkpoints[checkpoint_index]));
+                    // const checkpoint_index = @enumToInt(RewindLevel.directory_changed);
+                    // main_arena.rewindTo(@intCast(u16, arena_checkpoints[checkpoint_index]));
                     try navigation.init(&main_arena, navigation.directoryview_path);
                     is_draw_required = true;
                 },
@@ -1651,6 +1659,7 @@ fn appLoop(allocator: Allocator, app: *GraphicsContext) !void {
             }
         }
 
+        // TODO: Don't do this every frame
         if (audio.output.getState() == .playing) {
             ui.progress_bar.update();
             is_render_requested = true;

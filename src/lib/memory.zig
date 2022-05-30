@@ -1,10 +1,6 @@
 const std = @import("std");
 const assert = std.debug.assert;
 
-pub fn handleTrigger() void {
-    std.log.info("Handling trigger in memory", .{});
-}
-
 fn sliceFromNullTerminatedString(null_terminated_string: [*:0]const u8) []const u8 {
     var count: u32 = 0;
     const max: u32 = 1024;
@@ -34,9 +30,17 @@ pub const LinearArena = struct {
     }
 
     pub fn init(self: *Self, backing_memory: []u8) void {
+        @setCold(true);
         std.debug.assert(backing_memory.len > 0);
         self.memory = backing_memory;
         self.used = 0;
+    }
+
+    pub fn allocateChild(self: *Self, comptime alignment: u23, amount: u16) @This() {
+        return .{
+            .memory = self.allocateAligned(u8, alignment, amount),
+            .used = 0,
+        };
     }
 
     pub fn allocateAligned(self: *Self, comptime T: type, comptime alignment: u23, amount: u16) []T {

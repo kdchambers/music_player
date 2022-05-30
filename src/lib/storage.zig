@@ -47,6 +47,12 @@ pub inline fn get(comptime Type: type, address: PointerBaseType) *const Type {
     return @ptrCast(*const Type, &memory_space[address]);
 }
 
+pub inline fn indexFor(arena: *memory.LinearArena, slice: []const u8) u16 {
+    const ptr = @ptrCast(*const u8, slice.ptr);
+    const offset = @ptrToInt(&arena.memory[0]) - @ptrToInt(&memory_space[0]);
+    return @intCast(u16, arena.indexFor(ptr) + offset);
+}
+
 pub const String = struct {
     pub const Index = u16;
     pub const null_index: u16 = std.math.maxInt(u16);
@@ -73,7 +79,7 @@ pub const String = struct {
         std.mem.copy(u8, dest_slice, string);
 
         data[data.len - 1] = 0;
-        const result_index = arena.indexFor(@ptrCast(*const u8, data.ptr));
+        const result_index = indexFor(arena, data);
 
         // Sanity check
         std.debug.assert(String.length(result_index) == string.len);
@@ -147,7 +153,7 @@ pub const AbsolutePath = struct {
             _ = arena.allocate(u8, reserved_memory);
         }
 
-        return arena.indexFor(@ptrCast(*u8, allocation.ptr));
+        return indexFor(arena, allocation);
     }
 
     pub const interface = struct {
@@ -243,7 +249,7 @@ pub const SubPath = struct {
         const allocation_size_bytes = sub_path.len + @sizeOf(AbsolutePath.Index) + @sizeOf(u16);
 
         var allocated_memory = arena.allocateAligned(u8, 2, @intCast(u16, allocation_size_bytes));
-        const result_index = arena.indexFor(@ptrCast(*u8, allocated_memory.ptr));
+        const result_index = indexFor(arena, allocated_memory);
 
         std.debug.assert(@ptrToInt(&storage.memory_space[result_index]) % 2 == 0);
         assertIndexAlignment(result_index, 2);
