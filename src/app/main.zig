@@ -32,7 +32,6 @@ const QuadFaceWriter = gui.QuadFaceWriter;
 const QuadFaceWriterPool = gui.QuadFaceWriterPool;
 const ui = @import("ui");
 const theme = @import("Theme.zig").default;
-const LibraryNavigator = @import("LibraryNavigator.zig");
 const navigation = @import("navigation.zig").navigation;
 const storage = @import("storage");
 const SubPath = storage.SubPath;
