@@ -115,11 +115,6 @@ pub fn build(b: *Builder) void {
     const gen = vkgen.VkGenerateStep.init(b, "deps/vk.xml", "vk.zig");
     const vulkan_pkg = gen.package;
 
-    exe.addPackage(std.build.Pkg{
-        .name = "zigimg",
-        .path = .{ .path = "deps/zigimg/zigimg.zig" },
-    });
-
     const gui_pkg = std.build.Pkg{
         .name = "gui",
         .path = .{
