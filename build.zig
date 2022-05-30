@@ -25,7 +25,7 @@ pub fn build(b: *Builder) void {
     exe.addIncludeDir("deps/Vulkan-Headers/include");
     exe.addIncludeDir("deps/glfw/include/");
     exe.addIncludeDir("/usr/include/");
-    exe.addIncludeDir("/usr/local/include");
+    exe.addIncludeDir("/usr/local/include/");
     
     const geometry_pkg = std.build.Pkg{
         .name = "geometry",
@@ -45,12 +45,6 @@ pub fn build(b: *Builder) void {
     const storage_pkg = std.build.Pkg{
         .name = "storage",
         .path = .{ .path = lib_src_path ++ "storage.zig" },
-        .dependencies = &[_]Pkg{memory_pkg},
-    };
-
-    const library_navigator_pkg = std.build.Pkg{
-        .name = "LibraryNavigator",
-        .path = .{ .path = app_src_path ++ "LibraryNavigator.zig" },
         .dependencies = &[_]Pkg{memory_pkg},
     };
 
@@ -142,12 +136,6 @@ pub fn build(b: *Builder) void {
         },
     };
 
-    const action_pkg = std.build.Pkg{
-        .name = "action",
-        .path = .{ .path = app_src_path ++ "action.zig" },
-        .dependencies = &[_]Pkg{ graphics_pkg, gui_pkg, memory_pkg },
-    };
-
     const playlist_pkg = std.build.Pkg{
         .name = "Playlist",
         .path = .{
@@ -168,13 +156,11 @@ pub fn build(b: *Builder) void {
         },
         .dependencies = &[_]Pkg{
             audio_pkg,
-            library_navigator_pkg,
             geometry_pkg,
             graphics_pkg,
             gui_pkg,
             constants_pkg,
             text_pkg,
-            action_pkg,
             event_system_pkg,
             memory_pkg,
             playlist_pkg,
@@ -234,8 +220,6 @@ pub fn build(b: *Builder) void {
     exe.addPackage(gui_pkg);
     exe.addPackage(event_system_pkg);
     exe.addPackage(ui_pkg);
-    exe.addPackage(action_pkg);
-    exe.addPackage(library_navigator_pkg);
     exe.addPackage(playlist_pkg);
 
     exe.linkLibC();
@@ -244,7 +228,6 @@ pub fn build(b: *Builder) void {
     exe.linkSystemLibrary("glfw");
 
     // TODO: Staticially link or port
-    exe.linkSystemLibrary("FLAC");
     exe.linkSystemLibrary("mad");
 
     exe.install();
