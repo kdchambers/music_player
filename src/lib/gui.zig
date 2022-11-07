@@ -89,7 +89,7 @@ pub fn doColorSet(payload: PayloadColorSet) void {
 
     // TODO: Only add event if it is unique
     message_queue.add(.vertices_modified) catch |err| {
-        std.log.err("Failed to add .vertices_modified event to gui internal message queue: '{s}'", .{err});
+        std.log.err("Failed to add .vertices_modified event to gui internal message queue: '{}'", .{err});
     };
 }
 
@@ -104,7 +104,8 @@ fn doUpdateVertices(payload: *PayloadVerticesUpdate) void {
     const largest_range_vertex_count = if (alternate_vertex_count > loaded_vertex_count) alternate_vertex_count else loaded_vertex_count;
 
     std.debug.assert(module_arena.remainingCount() * @sizeOf(GenericVertex) >= largest_range_vertex_count);
-    var temp_swap_buffer = @ptrCast([*]GenericVertex, module_arena.access())[0..largest_range_vertex_count];
+    const alignment = @alignOf(GenericVertex);
+    var temp_swap_buffer = @ptrCast([*]GenericVertex, @alignCast(alignment, module_arena.access()))[0..largest_range_vertex_count];
     {
         var i: u32 = 0;
         while (i < (largest_range_vertex_count)) : (i += 1) {

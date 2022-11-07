@@ -42,6 +42,8 @@ const LibraryNavigator = @import("LibraryNavigator.zig");
 const navigation = @import("navigation.zig").navigation;
 const storage = @import("storage");
 
+const shaders = @import("shaders");
+
 const subsystems = struct {
     const null_value = std.math.maxInt(event_system.SubsystemIndex);
 
@@ -473,10 +475,10 @@ pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
 
-    navigation.subsystem_index = event_system.registerActionHandler(&navigation.doAction);
+    navigation.subsystem_index = event_system.registerActionHandler(navigation.doAction);
 
-    subsystems.audio = event_system.registerActionHandler(&audio.doAction);
-    subsystems.gui = event_system.registerActionHandler(&gui.doAction);
+    subsystems.audio = event_system.registerActionHandler(audio.doAction);
+    subsystems.gui = event_system.registerActionHandler(gui.doAction);
 
     std.debug.assert(navigation.subsystem_index == 0);
     std.debug.assert(subsystems.audio == 1);
@@ -495,7 +497,7 @@ pub fn main() !void {
 
     {
         arena_checkpoints[@enumToInt(RewindLevel.directory_changed)] = main_arena.checkpoint();
-        const current_directory = try std.fs.cwd().openDir(library_root_path, .{ .iterate = true });
+        const current_directory = try std.fs.cwd().openIterableDir(library_root_path, .{ .access_sub_paths = true });
         try navigation.init(&main_arena, current_directory);
     }
 
@@ -506,7 +508,7 @@ pub fn main() !void {
     var graphics_context: GraphicsContext = undefined;
 
     glfw.initialize() catch |err| {
-        log.err("Failed to initialized glfw. Error: {s}", .{err});
+        log.err("Failed to initialized glfw. Error: {}", .{err});
         return;
     };
     defer glfw.terminate();
@@ -527,7 +529,7 @@ pub fn main() !void {
 
     assert(window_size.width < 10_000 and window_size.height < 10_000);
 
-    const vk_proc = @ptrCast(fn (instance: vk.Instance, procname: [*:0]const u8) callconv(.C) vk.PfnVoidFunction, glfw.getInstanceProcAddress);
+    const vk_proc = @ptrCast(*const fn (instance: vk.Instance, procname: [*:0]const u8) callconv(.C) vk.PfnVoidFunction, &glfw.getInstanceProcAddress);
     graphics_context.base_dispatch = try BaseDispatch.load(vk_proc);
 
     const instance_extension = try zvk.glfwGetRequiredInstanceExtensions();
@@ -1405,13 +1407,12 @@ fn setupApplication(allocator: Allocator, app: *GraphicsContext) !void {
     mapped_device_memory = @ptrCast([*]u8, (try app.device_dispatch.mapMemory(app.logical_device, mesh_memory, 0, memory_size, .{})).?);
 
     {
-        const vertices_addr = @ptrCast([*]align(@alignOf(GenericVertex)) u8, &mapped_device_memory[vertices_range_index_begin]);
+        const alignment = @alignOf(GenericVertex);
+        const vertices_addr = @ptrCast([*]align(alignment) u8, @alignCast(alignment, &mapped_device_memory[vertices_range_index_begin]));
         const vertices_quad_size: u32 = vertices_range_size / @sizeOf(GenericVertex);
         quad_face_writer_pool = QuadFaceWriterPool(GenericVertex).initialize(vertices_addr, vertices_quad_size);
-    }
 
-    {
-        const vertices_base = @ptrCast([*]GenericVertex, &mapped_device_memory[vertices_range_index_begin]);
+        const vertices_base = @ptrCast([*]GenericVertex, @alignCast(alignment, &mapped_device_memory[vertices_range_index_begin]));
         const vertex_buffer_capacity = vertices_range_size / @sizeOf(GenericVertex);
         gui.init(&main_arena, subsystems.gui, vertices_base[0..vertex_buffer_capacity]);
     }
@@ -1674,12 +1675,12 @@ fn handleAudioPlay(allocator: Allocator, action_payload: action.PayloadAudioPlay
     switch (kind) {
         .mp3 => {
             audio.mp3.playFile(allocator, full_path.?) catch |err| {
-                log.err("Failed to play music: {s}", .{err});
+                log.err("Failed to play music: {}", .{err});
             };
         },
         .flac => {
             audio.flac.playFile(allocator, full_path.?) catch |err| {
-                log.err("Failed to play music: {s}", .{err});
+                log.err("Failed to play music: {}", .{err});
             };
         },
         else => {
@@ -1736,7 +1737,7 @@ fn mouseButtonCallback(window: *glfw.Window, button: glfw.MouseButton, act: glfw
 
         event_system.handleMouseEvents(position, is_pressed_left, is_pressed_right);
     } else |err| {
-        log.warn("Failed to get cursor position : {s}", .{err});
+        log.warn("Failed to get cursor position : {}", .{err});
     }
 }
 
@@ -2100,7 +2101,7 @@ fn handleAudioFinished() void {
     // TODO: Don't hardcode, or put in a definition
     var current_path_buffer: [128]u8 = undefined;
     const current_path = library_navigator.current_directory.realpath(".", current_path_buffer[0..]) catch |err| {
-        std.log.err("Failed to create std.fs.Dir of current path : {s}", .{err});
+        std.log.err("Failed to create std.fs.Dir of current path : {}", .{err});
         return;
     };
 
@@ -2116,16 +2117,16 @@ fn handleAudioFinished() void {
     switch (kind) {
         .mp3 => {
             audio.mp3.playFile(allocator, full_path.?) catch |err| {
-                log.err("Failed to play music: {s}", .{err});
+                log.err("Failed to play music: {}", .{err});
             };
         },
         .flac => {
             audio.flac.playFile(allocator, full_path.?) catch |err| {
-                log.err("Failed to play music: {s}", .{err});
+                log.err("Failed to play music: {}", .{err});
             };
         },
         else => {
-            std.log.err("Invalid kind '{s}' for track #{d} '{s}'", .{ kind, current_audio_index, library_navigator.loaded_media_items.items[current_audio_index].fileName() });
+            std.log.err("Invalid kind '{}' for track #{d} '{s}'", .{ kind, current_audio_index, library_navigator.loaded_media_items.items[current_audio_index].fileName() });
             unreachable;
         },
     }
@@ -2601,13 +2602,10 @@ const GraphicsContext = struct {
 };
 
 fn createFragmentShaderModule(app: GraphicsContext) !vk.ShaderModule {
-    const fragment_shader_path = "../../shaders/generic.frag.spv";
-    const shader_fragment_spv align(4) = @embedFile(fragment_shader_path);
-
     const create_info = vk.ShaderModuleCreateInfo{
         .s_type = vk.StructureType.shader_module_create_info,
-        .code_size = shader_fragment_spv.len,
-        .p_code = @ptrCast([*]const u32, shader_fragment_spv),
+        .code_size = shaders.fragment_spv.len,
+        .p_code = @ptrCast([*]const u32, @alignCast(4, shaders.fragment_spv)),
         .p_next = null,
         .flags = .{},
     };
@@ -2616,13 +2614,10 @@ fn createFragmentShaderModule(app: GraphicsContext) !vk.ShaderModule {
 }
 
 fn createVertexShaderModule(app: GraphicsContext) !vk.ShaderModule {
-    const vertex_shader_path = "../../shaders/generic.vert.spv";
-    const shader_vertex_spv align(4) = @embedFile(vertex_shader_path);
-
     const create_info = vk.ShaderModuleCreateInfo{
         .s_type = vk.StructureType.shader_module_create_info,
-        .code_size = shader_vertex_spv.len,
-        .p_code = @ptrCast([*]const u32, shader_vertex_spv),
+        .code_size = shaders.vertex_spv.len,
+        .p_code = @ptrCast([*]const u32, @alignCast(4, shaders.vertex_spv)),
         .p_next = null,
         .flags = .{},
     };

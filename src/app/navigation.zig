@@ -13,9 +13,9 @@ const DirectoryContents = struct {
     count: u16 = 0,
     size: u16 = 0,
 
-    /// Adds a new path / file 
-    /// The first entry is treated as the directory path, 
-    /// while the following are interpreted as files within that directory 
+    /// Adds a new path / file
+    /// The first entry is treated as the directory path,
+    /// while the following are interpreted as files within that directory
     // NOTE: parent path should include final '/'
     pub fn add(self: *@This(), arena: *memory.LinearArena, name: []const u8) void {
         std.log.info("Adding: {s}", .{name});
@@ -119,8 +119,8 @@ pub const navigation = struct {
 
     pub var contents: *DirectoryContents = undefined;
     pub var message_queue: FixedAtomicEventQueue(Event, 10) = .{};
-    pub var current_path: std.fs.Dir = undefined;
-    pub var playlist_path_opt: ?std.fs.Dir = null;
+    pub var current_path: std.fs.IterableDir = undefined;
+    pub var playlist_path_opt: ?std.fs.IterableDir = null;
     pub var root_depth: u16 = 0;
     pub var contains_audio: bool = false;
     pub var subsystem_index: event_system.SubsystemIndex = undefined;
@@ -214,13 +214,13 @@ pub const navigation = struct {
 
     // You could allocate some space for the path of the playlist path
     // Other submodules can take a u16 to it and read
-    pub fn init(arena: *memory.LinearArena, path: std.fs.Dir) !void {
+    pub fn init(arena: *memory.LinearArena, path: std.fs.IterableDir) !void {
         current_path = path;
 
         action_list.clear();
 
         var path_buffer: [512]u8 = undefined;
-        var path_string = try path.realpath(".", path_buffer[0..]);
+        var path_string = try path.dir.realpath(".", path_buffer[0..]);
 
         if (path_string.len == 512) {
             return error.InsufficientMemoryAllocated;
@@ -277,8 +277,8 @@ pub const navigation = struct {
         // NOTE: This action will invalidate most of the state / memory of the application
         //       As a result this action is passed up so that memory can be managed by a higher system
         if (root_depth > 0) {
-            current_path = current_path.openDir("..", .{}) catch |err| {
-                std.log.err("Failed to change to parent directory. Error: {s}", .{err});
+            current_path = current_path.dir.openIterableDir("..", .{}) catch |err| {
+                std.log.err("Failed to change to parent directory. Error: {}", .{err});
                 return;
             };
             root_depth -= 1;
@@ -305,8 +305,8 @@ pub const navigation = struct {
         }
 
         const subpath = contents.filename(directory_index);
-        const new_path = current_path.openDir(subpath, .{ .iterate = true }) catch |err| {
-            std.log.err("Failed to open subpath '{s}'. Error: {s}", .{ subpath, err });
+        const new_path = current_path.dir.openIterableDir(subpath, .{}) catch |err| {
+            std.log.err("Failed to open subpath '{s}'. Error: {}", .{ subpath, err });
             return;
         };
 
@@ -327,13 +327,13 @@ pub const navigation = struct {
         if (has_audio) {
             playlist_path_opt = new_path;
             message_queue.add(.playlist_opened) catch |err| {
-                std.log.err("Failed to emit .playlist_opened event. Error: {s}", .{err});
+                std.log.err("Failed to emit .playlist_opened event. Error: {}", .{err});
             };
         } else {
             current_path = new_path;
             root_depth += 1;
             message_queue.add(.directory_changed) catch |err| {
-                std.log.err("Failed to emit .directory_changed event. Error: {s}", .{err});
+                std.log.err("Failed to emit .directory_changed event. Error: {}", .{err});
             };
         }
     }

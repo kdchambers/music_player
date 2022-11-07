@@ -165,7 +165,7 @@ const coordinate_types: []u8 = undefined;
 const coordinates = []Point(i16);
 const control_points = []Point(i16);
 
-const Vertex = packed struct {
+const Vertex = struct {
     x: i16,
     y: i16,
     cx: i16,
@@ -179,7 +179,7 @@ const Vertex = packed struct {
 fn printVertices(vertices: []Vertex) void {
     for (vertices) |vertex, i| {
         assert(vertex.kind <= @enumToInt(VMove.cubic));
-        print("{d} : {s} xy ({d}, {d}) cxcy ({d},{d})\n", .{ i, @intToEnum(VMove, vertex.kind), vertex.x, vertex.y, vertex.cx, vertex.cy });
+        print("{d} : {} xy ({d}, {d}) cxcy ({d},{d})\n", .{ i, @intToEnum(VMove, vertex.kind), vertex.x, vertex.y, vertex.cx, vertex.cy });
     }
 }
 
@@ -290,16 +290,16 @@ pub fn scaleForPixelHeight(info: FontInfo, height: f32) f32 {
     return height / fheight;
 }
 
-const GlyhHeader = packed struct {
+const GlyhHeader = extern struct {
     // See: https://docs.microsoft.com/en-us/typography/opentype/spec/glyf
     //
     //  If the number of contours is greater than or equal to zero, this is a simple glyph.
     //  If negative, this is a composite glyph — the value -1 should be used for composite glyphs.
-    contour_count: i16,
-    x_minimum: i16,
-    y_minimum: i16,
-    x_maximum: i16,
-    y_maximum: i16,
+    contour_count: i16 align(1),
+    x_minimum: i16 align(1),
+    y_minimum: i16 align(1),
+    x_maximum: i16 align(1),
+    y_maximum: i16 align(1),
 };
 
 // See: https://docs.microsoft.com/en-us/typography/opentype/spec/glyf
@@ -596,7 +596,7 @@ fn getGlyphBox(info: FontInfo, glyph_index: i32) ?BoundingBox {
     assert(info.cff.size == 0);
 
     const g: usize = getGlyfOffset(info, glyph_index) catch |err| {
-        log.warn("Error in getGlyfOffset {s}", .{err});
+        log.warn("Error in getGlyfOffset {}", .{err});
         return null;
     };
 
@@ -623,7 +623,6 @@ fn Offset2D(comptime T: type) type {
 }
 
 fn getGlyphBitmapSubpixel(allocator: Allocator, info: FontInfo, desired_scale: Scale2D(f32), shift: Shift2D(f32), glyph_index: i32, offset: Offset2D(u32)) !Bitmap {
-    _ = shift;
     _ = offset;
 
     var scale = desired_scale;
@@ -674,7 +673,7 @@ fn Point(comptime T: type) type {
     };
 }
 
-fn tessellateCurve(points: *[]Point(f32), x0: f32, y0: f32, x1: f32, y1: f32, x2: f32, y2: f32, objspace_flatness_squared: f32, n: i32) u32 {
+fn tessellateCurve(points: []Point(f32), x0: f32, y0: f32, x1: f32, y1: f32, x2: f32, y2: f32, objspace_flatness_squared: f32, n: i32) u32 {
     const mx: f32 = (x0 + (2 * x1) + x2) / 4.0;
     const my: f32 = (y0 + (2 * y1) + y2) / 4.0;
 
@@ -689,18 +688,18 @@ fn tessellateCurve(points: *[]Point(f32), x0: f32, y0: f32, x1: f32, y1: f32, x2
 
     if ((dx * dx) + (dy * dy) > objspace_flatness_squared) {
         points_count += tessellateCurve(points, x0, y0, (x0 + x1) / 2.0, (y0 + y1) / 2.0, mx, my, objspace_flatness_squared, n + 1);
-        points_count += tessellateCurve(&points.*[points_count..], mx, my, (x1 + x2) / 2.0, (y1 + y2) / 2.0, x2, y2, objspace_flatness_squared, n + 1);
+        points_count += tessellateCurve(points[points_count..], mx, my, (x1 + x2) / 2.0, (y1 + y2) / 2.0, x2, y2, objspace_flatness_squared, n + 1);
     } else {
         points_count += 1;
 
-        points.*[0].x = x2;
-        points.*[0].y = y2;
+        points[0].x = x2;
+        points[0].y = y2;
     }
 
     return points_count;
 }
 
-fn tessellateCubic(points: *[]Point(f32), x0: f32, y0: f32, x1: f32, y1: f32, x2: f32, y2: f32, x3: f32, y3: f32, objspace_flatness_squared: f32, n: i32) u32 {
+fn tessellateCubic(points: []Point(f32), x0: f32, y0: f32, x1: f32, y1: f32, x2: f32, y2: f32, x3: f32, y3: f32, objspace_flatness_squared: f32, n: i32) u32 {
     assert(false);
     const dx0: f32 = x1 - x0;
     const dy0: f32 = y1 - y0;
@@ -739,10 +738,10 @@ fn tessellateCubic(points: *[]Point(f32), x0: f32, y0: f32, x1: f32, y1: f32, x2
         const my: f32 = (ya + yb) / 2;
 
         points_count += tessellateCubic(points, x0, y0, x01, y01, xa, ya, mx, my, objspace_flatness_squared, n + 1);
-        points_count += tessellateCubic(&points.*[points_count..], mx, my, xb, yb, x23, y23, x3, y3, objspace_flatness_squared, n + 1);
+        points_count += tessellateCubic(points[points_count..], mx, my, xb, yb, x23, y23, x3, y3, objspace_flatness_squared, n + 1);
     } else {
-        points.*[0].x = x3;
-        points.*[0].y = y3;
+        points[0].x = x3;
+        points[0].y = y3;
 
         points_count += 1;
     }
@@ -818,7 +817,7 @@ fn flattenCurves(allocator: Allocator, vertices: []Vertex, objspace_flatness: f3
                 const fx: f32 = @intToFloat(f32, vertex.x);
                 const fy: f32 = @intToFloat(f32, vertex.y);
 
-                points_count += tessellateCurve(&points[points_count..], x, y, fcx, fcy, fx, fy, objspace_flatness_squared, 0);
+                points_count += tessellateCurve(points[points_count..], x, y, fcx, fcy, fx, fy, objspace_flatness_squared, 0);
                 x = @intToFloat(f32, vertex.x);
                 y = @intToFloat(f32, vertex.y);
             },
@@ -832,7 +831,7 @@ fn flattenCurves(allocator: Allocator, vertices: []Vertex, objspace_flatness: f3
                 const fx: f32 = @intToFloat(f32, vertex.x);
                 const fy: f32 = @intToFloat(f32, vertex.y);
 
-                points_count += tessellateCubic(&points[points_count..], fx, fy, fcx, fcy, fcx1, fcy1, fx, fy, objspace_flatness_squared, 0);
+                points_count += tessellateCubic(points[points_count..], fx, fy, fcx, fcy, fcx1, fcy1, fx, fy, objspace_flatness_squared, 0);
 
                 x = @intToFloat(f32, vertex.x);
                 y = @intToFloat(f32, vertex.y);
@@ -1416,24 +1415,24 @@ const TableDirectory = struct {
     }
 };
 
-const Head = packed struct {
+const Head = extern struct {
     version: f32,
     font_revision: f32,
     checksum_adjustment: u32,
     magic_number: u32, // 0x5F0F3CF5
-    flags: u16,
-    units_per_em: u16,
-    created: i64,
-    modified: i64,
-    x_min: i16,
-    y_min: i16,
-    x_max: i16,
-    y_max: i16,
-    mac_style: u16,
-    lowest_rec_PPEM: u16,
-    font_direction_hint: i16,
-    index_to_loc_format: i16,
-    glyph_data_format: i16,
+    flags: u16 align(1),
+    units_per_em: u16 align(1),
+    created: i64 align(1),
+    modified: i64 align(1),
+    x_min: i16 align(1),
+    y_min: i16 align(1),
+    x_max: i16 align(1),
+    y_max: i16 align(1),
+    mac_style: u16 align(1),
+    lowest_rec_PPEM: u16 align(1),
+    font_direction_hint: i16 align(1),
+    index_to_loc_format: i16 align(1),
+    glyph_data_format: i16 align(1),
 };
 
 const cff_magic_number: u32 = 0x5F0F3CF5;
@@ -1510,7 +1509,7 @@ const CMAPSubtable = struct {
                 } else {
                     table.platform_specific_id = .{ .unicode = .other };
                 }
-                log.info("Platform specific ID for '{s}' => '{s}'", .{ table.platform_id, table.platform_specific_id.unicode });
+                log.info("Platform specific ID for '{}' => '{}'", .{ table.platform_id, table.platform_specific_id.unicode });
             },
             .microsoft => {
                 // unreachable;

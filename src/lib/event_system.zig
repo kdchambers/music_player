@@ -19,16 +19,16 @@ const ScreenPixelBaseType = constants.ScreenPixelBaseType;
 pub const ActionIndex = u12;
 pub const SubsystemIndex = u4;
 
-pub const ActionHandlerFunction = fn (ActionIndex) void;
+pub const ActionHandlerFunction = *const fn (ActionIndex) void;
 pub const null_action_index = std.math.maxInt(ActionIndex);
 
-pub const SubsystemActionRange = packed struct {
+pub const SubsystemActionRange = struct {
     subsystem: SubsystemIndex,
     base_index: ActionIndex,
     index_count: u16,
 };
 
-pub const SubsystemActionIndex = packed struct {
+pub const SubsystemActionIndex = struct {
     pub const null_subsystem: SubsystemIndex = std.math.maxInt(SubsystemIndex);
     pub const null_value = SubsystemActionIndex{
         .subsystem = null_subsystem,
@@ -48,7 +48,7 @@ test "SubsystemActionIndex size" {
 }
 
 const registered_action_handlers_max: u32 = std.math.maxInt(SubsystemIndex) - 1;
-var registered_action_handlers: [registered_action_handlers_max]*const ActionHandlerFunction = undefined;
+var registered_action_handlers: [registered_action_handlers_max]ActionHandlerFunction = undefined;
 var registered_action_handlers_count: u8 = 0;
 
 pub var mouse_event_writer: MouseEventWriter = undefined;
@@ -78,7 +78,7 @@ const MouseEventEntryType = enum(u8) {
     pattern_grid,
 };
 
-const EventEntry = packed struct {
+const EventEntry = struct {
     const Flags = packed struct {
         disabled: bool = false,
         reflexive: bool = false,
@@ -97,7 +97,7 @@ test "EventEntry size" {
     try std.testing.expect(@alignOf(EventEntry) == 1);
 }
 
-const MouseEventEntryBase = packed struct {
+const MouseEventEntryBase = struct {
     extent: geometry.Extent2D(f32), // u16 * 4
     kind: MouseEventEntryType,
     action_count: u8 = 0, // These can be used together to calculate size
@@ -108,7 +108,7 @@ const MouseEventEntryBase = packed struct {
     pub fn log(self: *@This()) void {
         const print = std.debug.print;
 
-        print("\nKind: {s}\n", .{self.kind});
+        print("\nKind: {}\n", .{self.kind});
         print("Events: {d}\n", .{self.event_count});
         print("Actions: {d}\n", .{self.action_count});
         var event_index: u32 = 0;
@@ -117,7 +117,7 @@ const MouseEventEntryBase = packed struct {
         var event = &event_base[0];
 
         while (event_index < self.event_count) : (event_index += 1) {
-            print("  Event #{d} {s} with {d} actions\n", .{ event_index, event.kind, event.action_count });
+            print("  Event #{d} {} with {d} actions\n", .{ event_index, event.kind, event.action_count });
 
             var action_index: u32 = 0;
             var actions_base = @intToPtr([*]SubsystemActionIndex, @ptrToInt(event) + @sizeOf(EventEntry));
@@ -133,11 +133,11 @@ const MouseEventEntryBase = packed struct {
     }
 };
 
-const MouseEventEntryExtent = packed struct {
+const MouseEventEntryExtent = struct {
     base: MouseEventEntryBase,
 };
 
-const PatternVerticalEntry = packed struct {
+const PatternVerticalEntry = struct {
     base: MouseEventEntryBase,
     gap: f32,
     count: u8,
@@ -151,7 +151,7 @@ const PatternVerticalEntry = packed struct {
     }
 };
 
-const PatternGridEntry = packed struct {
+const PatternGridEntry = struct {
     base: MouseEventEntryBase,
     horizonal_gap: f32,
     vertical_gap: f32,
@@ -172,15 +172,15 @@ pub const MouseEventWriter = struct {
 
     pub fn log(self: *@This()) void {
         var index: u32 = 0;
-        const base = @ptrCast([*]MouseEventEntryBase, self.backing_arena.memory.ptr);
+        const base = @ptrCast(*MouseEventEntryBase, @alignCast(@alignOf(MouseEventEntryBase), self.backing_arena.memory.ptr));
         while (index < self.count) : (index += 1) {
             base[index].log();
         }
     }
 
     pub fn print(self: @This()) void {
-        const base = @ptrCast(*MouseEventEntryBase, self.backing_arena.memory.ptr);
-        std.debug.print("Type: {s}\n", .{base.kind});
+        const base = @ptrCast(*MouseEventEntryBase, @alignCast(@alignOf(MouseEventEntryBase), self.backing_arena.memory.ptr));
+        std.debug.print("Type: {}\n", .{base.kind});
         std.debug.print("Extent: {d} {d} -> {d}x{d}\n", .{ base.extent.x, base.extent.y, base.extent.width, base.extent.height });
     }
 
@@ -235,7 +235,7 @@ const PatternVertical = struct {
     count: u16,
 };
 
-const Pattern = packed struct {
+const Pattern = struct {
     extent: geometry.Extent2D(ScreenNormalizedBaseType),
     horizonal_gap: f32,
     vertical_gap: f32,
@@ -255,7 +255,7 @@ const Pattern = packed struct {
     }
 };
 
-pub inline fn registerActionHandler(action_handler_function: *const ActionHandlerFunction) SubsystemIndex {
+pub inline fn registerActionHandler(action_handler_function: ActionHandlerFunction) SubsystemIndex {
     std.debug.assert(registered_action_handlers_count < (std.math.maxInt(SubsystemIndex) + 1));
     registered_action_handlers[registered_action_handlers_count] = action_handler_function;
     registered_action_handlers_count += 1;
@@ -385,7 +385,8 @@ pub fn handleMouseEvents(
 
     // Loop through all the attachments
     while (i < mouse_event_writer.count) : (i += 1) {
-        var current_attachment = @ptrCast(*MouseEventEntryBase, &mouse_event_writer.backing_arena.memory[offset]);
+        const alignment = @alignOf(MouseEventEntryBase);
+        var current_attachment = @ptrCast(*MouseEventEntryBase, @alignCast(alignment, &mouse_event_writer.backing_arena.memory[offset]));
         offset += @sizeOf(MouseEventEntryBase);
 
         std.debug.assert(current_attachment.kind == .extent);
@@ -471,7 +472,7 @@ pub fn handleMouseEvents(
             std.log.err("Invalid subsystem: {d}", .{action.subsystem});
             std.debug.assert(registered_action_handlers_count > action.subsystem);
         }
-        registered_action_handlers[action.subsystem].*(action.index);
+        registered_action_handlers[action.subsystem](action.index);
     }
 }
 

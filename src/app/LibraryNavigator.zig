@@ -154,7 +154,7 @@ pub fn down(
     };
 
     self.current_directory = self.current_directory.openDir(new_directory_name, .{ .iterate = true }) catch |err| {
-        std.log.err("Failed to open new directory '{s}' : {s}", .{ new_directory_name, err });
+        std.log.err("Failed to open new directory '{s}' : {}", .{ new_directory_name, err });
         return;
     };
 

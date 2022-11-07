@@ -5,7 +5,7 @@
 
 const std = @import("std");
 
-const Flag = packed struct {
+const Flag = packed struct(u8) {
     reserved_bit_0: u1,
     reserved_bit_1: u1,
     reserved_bit_2: u1,
@@ -28,14 +28,14 @@ pub inline fn synchsafeToU32(value: u32) u32 {
     return result;
 }
 
-pub const Header = packed struct {
+pub const Header = extern struct {
     const Self = @This();
 
     identifier: [3]u8,
     version_major: u8,
     version_revision: u8,
     flags: u8,
-    size: u32,
+    size: u32 align(1),
 
     pub fn decodeSize(self: *Self) void {
         self.size = std.mem.bigToNative(u32, self.size);
@@ -50,7 +50,7 @@ pub const TextEncoding = enum(u8) {
     utf_8,
 };
 
-pub const Frame = packed struct {
+pub const Frame = extern struct {
     const Self = @This();
 
     id: [4]u8,
@@ -63,10 +63,10 @@ pub const Frame = packed struct {
     }
 };
 
-const ExtendedHeader = packed struct {
+const ExtendedHeader = extern struct {
     size: u32,
-    flag_bytes_count: u8,
-    extended_flags: u8,
+    flag_bytes_count: u8 align(1),
+    extended_flags: u8 align(1),
 };
 
 test "synchsafeToU32" {

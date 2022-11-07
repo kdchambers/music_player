@@ -230,7 +230,7 @@ pub fn FixedBuffer(comptime BaseType: type, comptime capacity: u32) type {
 
         pub inline fn append(self: *Self, item: BaseType) u32 {
             if (self.count >= capacity) {
-                std.log.err("Overflow of {s} with capacity: {d}", .{ BaseType, self.count });
+                std.log.err("Overflow of {} with capacity: {d}", .{ BaseType, self.count });
                 assert(self.count < capacity);
             }
 

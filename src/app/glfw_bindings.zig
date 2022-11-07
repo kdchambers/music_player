@@ -19,7 +19,7 @@ pub const c = @cImport({
 const constants = @import("constants.zig");
 const ScreenPixelBaseType = constants.ScreenPixelBaseType;
 
-pub const VKProc = fn () callconv(.C) void;
+pub const VKProc = *const fn () callconv(.C) void;
 
 pub const Window = opaque {};
 
@@ -95,8 +95,8 @@ pub fn HintValueType(comptime hint: Hint) type {
 var is_mouse_button_callback_set: bool = false;
 var is_mouse_cursor_callback_set: bool = false;
 
-var userMouseButtonCallback: fn (window: *Window, button: MouseButton, action: Action, mods: Mods) void = undefined;
-var userMouseCursorCallback: fn (window: *Window, xpos: f64, ypos: f64) void = undefined;
+var userMouseButtonCallback: *const fn (window: *Window, button: MouseButton, action: Action, mods: Mods) void = undefined;
+var userMouseCursorCallback: *const fn (window: *Window, xpos: f64, ypos: f64) void = undefined;
 
 fn mouseCursorCallback(window: ?*c.GLFWwindow, xpos: f64, ypos: f64) callconv(.C) void {
     if (is_mouse_cursor_callback_set) {
@@ -114,7 +114,7 @@ fn mouseButtonCallback(window: ?*c.GLFWwindow, button: c_int, action: c_int, mod
     }
 }
 
-pub inline fn setCursorPosCallback(window: *Window, callback: fn (window: *Window, xpos: f64, ypos: f64) void) void {
+pub inline fn setCursorPosCallback(window: *Window, callback: *const fn (window: *Window, xpos: f64, ypos: f64) void) void {
     userMouseCursorCallback = callback;
     if (!is_mouse_cursor_callback_set) {
         _ = c.glfwSetCursorPosCallback(@ptrCast(*c.GLFWwindow, window), mouseCursorCallback);
@@ -122,7 +122,7 @@ pub inline fn setCursorPosCallback(window: *Window, callback: fn (window: *Windo
     }
 }
 
-pub inline fn setMouseButtonCallback(window: *Window, callback: fn (window: *Window, button: MouseButton, action: Action, mods: Mods) void) void {
+pub inline fn setMouseButtonCallback(window: *Window, callback: *const fn (window: *Window, button: MouseButton, action: Action, mods: Mods) void) void {
     userMouseButtonCallback = callback;
     if (!is_mouse_button_callback_set) {
         _ = c.glfwSetMouseButtonCallback(@ptrCast(*c.GLFWwindow, window), mouseButtonCallback);

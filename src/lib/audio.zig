@@ -63,7 +63,7 @@ pub const TrackMetadataStorage = packed struct {
             const tag = @intToEnum(TagType, mem[i]);
             const size = mem[i + 1];
             const value = mem[i + 2 .. i + 2 + size];
-            std.debug.print("  {s} : {d} -> '{s}'\n", .{ tag, size, value });
+            std.debug.print("  {} : {d} -> '{s}'\n", .{ tag, size, value });
             i += (size + 3);
         }
     }
@@ -132,7 +132,6 @@ const LinearPlaylist = struct {
     }
 
     pub fn filename(self: Self, allocator: Allocator, index: u8) []const u8 {
-        _ = index;
         _ = allocator;
         std.debug.assert(index < self.track_count);
         var i: u16 = 0;
@@ -276,7 +275,7 @@ fn add(arena: *memory.LinearArena, text: []const u8, tag_type: TagType) u16 {
     var string = arena.allocate(u8, @intCast(u16, text.len + 1));
     std.mem.copy(u8, string, text);
     string[text.len] = 0;
-    std.debug.print("  !{s}: {s}\n", .{ tag_type, string[0..text.len] });
+    std.debug.print("  !{}: {s}\n", .{ tag_type, string[0..text.len] });
 
     std.debug.print("CP: {d} New {d} Used {d}\n", .{ result, (text.len + 3), arena.used });
     std.debug.assert(result + (text.len + 3) == arena.used);
@@ -285,7 +284,7 @@ fn add(arena: *memory.LinearArena, text: []const u8, tag_type: TagType) u16 {
 }
 
 pub const mp3 = struct {
-    pub fn loadMetaFromDirectory(arena: *memory.LinearArena, directory: std.fs.Dir) ![]TrackMetadataIndices {
+    pub fn loadMetaFromDirectory(arena: *memory.LinearArena, directory: std.fs.IterableDir) ![]TrackMetadataIndices {
         var file_count: u16 = 0;
         var files_buffer: [64]std.fs.File = undefined;
 
@@ -303,8 +302,8 @@ pub const mp3 = struct {
 
                 std.log.info("Adding: {s}", .{entry.name});
 
-                files_buffer[file_count] = directory.openFile(entry.name, .{}) catch |err| {
-                    std.log.err("Failed to open file '{s}' with err {s}", .{ entry.name, err });
+                files_buffer[file_count] = directory.dir.openFile(entry.name, .{}) catch |err| {
+                    std.log.err("Failed to open file '{s}' with err {}", .{ entry.name, err });
                     return err;
                 };
                 file_count += 1;
@@ -375,7 +374,7 @@ pub const mp3 = struct {
                 std.log.info("Index {d} Header {d}", .{ i, header.size });
 
                 _ = try file.read(frame_input_buffer[0..@sizeOf(id3.Frame)]);
-                frame = @ptrCast(*id3.Frame, &frame_input_buffer[0]);
+                frame = @ptrCast(*id3.Frame, @alignCast(@alignOf(id3.Frame), &frame_input_buffer[0]));
 
                 frame.size = std.mem.bigToNative(u32, frame.size);
                 if (header.version_major == '4') {
@@ -405,7 +404,7 @@ pub const mp3 = struct {
                     std.log.info("Adding artist '{s}'", .{artist_value});
 
                     if (encoding != .iso_8859_1) {
-                        std.log.warn("Unsupported text encoding: {s}", .{encoding});
+                        std.log.warn("Unsupported text encoding: {}", .{encoding});
                     }
 
                     track_metadata_indices[file_i].artist = blk: {
@@ -425,7 +424,7 @@ pub const mp3 = struct {
 
                     const encoding = @intToEnum(id3.TextEncoding, album_value[0]);
                     if (encoding != .iso_8859_1) {
-                        std.log.warn("Unsupported text encoding: {s}", .{encoding});
+                        std.log.warn("Unsupported text encoding: {}", .{encoding});
                     }
 
                     std.log.info("Adding album '{s}'", .{album_value[1..]});
@@ -445,7 +444,7 @@ pub const mp3 = struct {
 
                     const encoding = @intToEnum(id3.TextEncoding, title_value[0]);
                     if (encoding != .iso_8859_1) {
-                        std.log.warn("Unsupported text encoding: {s}", .{encoding});
+                        std.log.warn("Unsupported text encoding: {}", .{encoding});
                     }
 
                     metadata_header.title_count += 1;
@@ -471,7 +470,7 @@ pub const mp3 = struct {
         _ = frame;
         _ = data;
 
-        log.err("Failure in mp3 decoding '{s}'", .{mad.mad_stream_errorstr(stream)});
+        log.err("Failure in mp3 decoding '{}'", .{mad.mad_stream_errorstr(stream)});
         return mad.MAD_FLOW_CONTINUE;
     }
 
@@ -592,7 +591,7 @@ pub const mp3 = struct {
                         //
                     },
                     else => {
-                        log.warn("Unhandled input event in audio: {s}", .{event});
+                        log.warn("Unhandled input event in audio: {}", .{event});
                     },
                 }
             }
@@ -661,13 +660,13 @@ pub const mp3 = struct {
         log.info("Track length decoded in {d} ms", .{get_track_length_end_ts - get_track_length_start_ts});
 
         output_event_buffer.add(.duration_calculated) catch |err| {
-            log.err("Failed to add output event: {s}", .{err});
+            log.err("Failed to add output event: {}", .{err});
         };
 
         output.playback_state = .playing;
 
         output_event_buffer.add(.started) catch |err| {
-            log.err("Failed to add output event: {s}", .{err});
+            log.err("Failed to add output event: {}", .{err});
         };
 
         mad.mad_decoder_init(&decoder, @ptrCast(*anyopaque, input_buffer), inputCallback, null, null, outputCallback, errorCallback, null);
@@ -675,7 +674,7 @@ pub const mp3 = struct {
         _ = mad.mad_decoder_finish(&decoder);
 
         output_event_buffer.add(.finished) catch |err| {
-            std.log.err("Failed to add output Audio event : {s}", .{err});
+            std.log.err("Failed to add output Audio event : {}", .{err});
         };
     }
 
@@ -801,7 +800,6 @@ pub const flac = struct {
         _ = libflac.FLAC__metadata_get_streaminfo(input_file_path, &metadata_info);
 
         const metadata_type: libflac.FLAC__MetadataType = metadata_info.@"type";
-        _ = metadata_type;
 
         if (metadata_type != libflac.FLAC__METADATA_TYPE_STREAMINFO) {
             return error.ReadMetadataFailed;
