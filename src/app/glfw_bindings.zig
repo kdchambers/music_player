@@ -23,6 +23,8 @@ pub const VKProc = *const fn () callconv(.C) void;
 
 pub const Window = opaque {};
 
+pub const getRequiredInstanceExtensions = c.glfwGetRequiredInstanceExtensions;
+
 pub extern fn glfwGetInstanceProcAddress(instance: vk.Instance, procname: [*:0]const u8) vk.PfnVoidFunction;
 pub extern fn glfwGetPhysicalDevicePresentationSupport(instance: vk.Instance, pdev: vk.PhysicalDevice, queuefamily: u32) c_int;
 pub extern fn glfwCreateWindowSurface(instance: vk.Instance, window: *c.GLFWwindow, allocation_callbacks: ?*const vk.AllocationCallbacks, surface: *vk.SurfaceKHR) vk.Result;
@@ -172,12 +174,6 @@ pub inline fn createWindowSurface(instance: vk.Instance, window: *Window, surfac
     );
     if (v == vk.Result.success) return v;
     return error.FailedToCreateWindowSurface;
-}
-
-pub inline fn getRequiredInstanceExtensions() error{APIUnavailable}![][*:0]const u8 {
-    var count: u32 = 0;
-    if (c.glfwGetRequiredInstanceExtensions(&count)) |extensions| return @ptrCast([*][*:0]const u8, extensions)[0..count];
-    unreachable;
 }
 
 pub inline fn getFramebufferSize(window: *Window) geometry.Dimensions2D(ScreenPixelBaseType) {

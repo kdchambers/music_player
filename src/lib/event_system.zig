@@ -17,10 +17,120 @@ const ScreenNormalizedBaseType = constants.ScreenNormalizedBaseType;
 const ScreenPixelBaseType = constants.ScreenPixelBaseType;
 
 pub const ActionIndex = u12;
+pub const EventIndex = u12;
 pub const SubsystemIndex = u4;
 
+pub const InternalEventBinding = struct {
+    /// Event that occurs within the system
+    origin: SubsystemEventIndex,
+
+    /// Action that is to be invoked in response
+    target: SubsystemActionIndex,
+};
+
+pub fn resetActiveTimeIntervalEvents() void {
+    for (registered_time_interval_events.toSliceMutable()) |*event| {
+        event.start_timestamp_ms = 0;
+    }
+}
+
+pub fn resetBindings() void {
+    registered_time_interval_events.clear();
+    internal_event_bindings.clear();
+}
+
+var internal_event_bindings: memory.FixedBuffer(InternalEventBinding, 20) = .{};
+
+pub fn internalEventsBind(binding: InternalEventBinding) u16 {
+    return @intCast(u16, internal_event_bindings.append(binding));
+}
+
+pub fn internalEventHandle(origin: SubsystemActionIndex) void {
+    if (internal_event_bindings.count == 0) {
+        std.log.warn("No internal events loaded to invoke", .{});
+        return;
+    }
+    for (internal_event_bindings.toSlice()) |event| {
+        const current_origin = event.origin;
+        if (current_origin.index == origin.index and current_origin.subsystem == origin.subsystem) {
+            registered_action_handlers[event.target.subsystem].*(event.target.index);
+        }
+    }
+}
+
 pub const ActionHandlerFunction = *const fn (ActionIndex) void;
-pub const null_action_index = std.math.maxInt(ActionIndex);
+
+pub const null_action_index: ActionIndex = std.math.maxInt(ActionIndex);
+pub const null_subsystem_index: SubsystemIndex = std.math.maxInt(SubsystemIndex);
+
+const TimeIntervalEventBinding = struct {
+    callback: *const fn () void,
+    start_timestamp_ms: i64,
+    last_called_timestamp_ms: i64,
+    interval_milliseconds: u32,
+    invocation_count: u32 = 0,
+};
+
+pub const TimeIntervalEventEntry = struct {
+    callback: *const fn () void,
+    interval_milliseconds: u32,
+};
+
+var registered_time_interval_events: memory.FixedBuffer(TimeIntervalEventBinding, 20) = .{};
+
+pub fn timeIntervalEventRegister(entry: TimeIntervalEventEntry) u16 {
+    return @intCast(u16, registered_time_interval_events.append(.{
+        .callback = entry.callback,
+        .start_timestamp_ms = 0,
+        .last_called_timestamp_ms = 0,
+        .interval_milliseconds = entry.interval_milliseconds,
+    }));
+}
+
+pub fn timeIntervalEventBegin(entry_id: u16) void {
+    var entry = &registered_time_interval_events.items[entry_id];
+    const current_timestamp_ms = std.time.milliTimestamp();
+    std.debug.assert(current_timestamp_ms >= 0);
+    entry.start_timestamp_ms = current_timestamp_ms;
+    entry.last_called_timestamp_ms = entry.start_timestamp_ms;
+
+    std.log.info("timeIntervalEvent started", .{});
+}
+
+pub fn handleTimeEvents(timestamp_ms: i64) void {
+    const active_handlers_count = registered_time_interval_events.count;
+    std.debug.assert(active_handlers_count == 0 or active_handlers_count == 1);
+
+    for (registered_time_interval_events.toSliceMutable()) |*event_entry| {
+        if (event_entry.start_timestamp_ms == 0) {
+            continue;
+        }
+
+        if (timestamp_ms < event_entry.last_called_timestamp_ms) {
+            // This is possible as last_called_timestamp can be initialized
+            // from another thread between this point and when
+            // timestamp_ms is created in the app loop
+            continue;
+        }
+
+        var since_last_call = timestamp_ms - event_entry.last_called_timestamp_ms;
+        var i: u32 = 0;
+        while (since_last_call >= event_entry.interval_milliseconds) : (i += 1) {
+            // Recalculate last_called_timestamp_ms to be a multiple of interval_milliseconds
+            // to avoid time drift
+            event_entry.invocation_count += 1;
+            event_entry.last_called_timestamp_ms = event_entry.start_timestamp_ms + (event_entry.interval_milliseconds * event_entry.invocation_count);
+            since_last_call = timestamp_ms - event_entry.last_called_timestamp_ms;
+
+            event_entry.callback();
+        }
+    }
+}
+
+pub const SubsystemEventIndex = packed struct {
+    subsystem: SubsystemIndex,
+    index: EventIndex,
+};
 
 pub const SubsystemActionRange = struct {
     subsystem: SubsystemIndex,
@@ -475,244 +585,3 @@ pub fn handleMouseEvents(
         registered_action_handlers[action.subsystem](action.index);
     }
 }
-
-// Collects a list of all mouse related events that have been triggered
-// Informs all subsystems to execute bounded actions
-// fn handleMouseEvents(x: f64, y: f64, is_pressed_left: bool, is_pressed_right: bool) void {
-// const half_width = @intToFloat(f32, screen_dimensions.width) / 2.0;
-// const half_height = @intToFloat(f32, screen_dimensions.height) / 2.0;
-
-// const triggered_events_buffer_size = 20;
-// var triggered_events_buffer: EventID[triggered_events_buffer_size] = undefined;
-
-// var arena: memory.LinearArena = undefined;
-// arena.init(&triggered_events_buffer[0..]);
-
-// const coordinates = geometry.Coordinates2D(ScreenNormalizedBaseType){
-// .x = @floatCast(f32, (x - half_width) * 2.0) / @intToFloat(f32, screen_dimensions.width),
-// .y = @floatCast(f32, (y - half_height) * 2.0) / @intToFloat(f32, screen_dimensions.height),
-// };
-
-// const triggered_events = event_system.eventsFromMouseUpdate(
-// arena,
-// coordinates,
-// .{
-// .is_left_pressed = is_pressed_left,
-// .is_right_pressed = is_pressed_right,
-// },
-// );
-
-// if (triggered_events.len == 0) return;
-
-// const triggered_actions_buffer_size = 20;
-// var triggered_actions_buffer: EventID[triggered_actions_buffer_size] = undefined;
-// var triggered_actions_count: u32 = 0;
-
-// // NOTE: We collect all first before we begin triggering actions to avoid cache trashing
-// // TODO: Order collected events by subsystem
-// for (triggered_events.toSlice()) |event_id| {
-// for (bindings) |binding| {
-// if (binding.event_index == event_id) {
-// triggered_actions_buffer[triggered_actions_count] = binding.action;
-// triggered_actions_count += 1;
-// }
-// }
-// }
-
-// const triggered_actions = triggered_actions_buffer[0..triggered_actions_count];
-// for (triggered_actions) |triggered_action| {
-// switch (triggered_action.subsystem) {
-// //
-// }
-// }
-
-// is_render_requested = true;
-// }
-
-// // TODO: This can be deprecated now that extents aren't duplicated.
-// //       Just call registerMouseHoverEnterAction and registerMouseHoverExitAction
-// pub fn registerMouseHoverReflexiveEnterAction(
-// screen_extent: geometry.Extent2D(ScreenNormalizedBaseType),
-// ) [2]u16 {
-// const attachment_id = addUniqueExtent(screen_extent);
-
-// const id_1 = @intCast(u16, registered_events.append(.{
-// .event_type = .mouse_hover_reflexive_enter,
-// .attachment_id = @intCast(u8, attachment_id),
-// }));
-
-// const id_2 = @intCast(u16, registered_events.append(.{
-// .event_type = .none,
-// .attachment_id = @intCast(u8, attachment_id),
-// }));
-
-// return .{ id_1, id_2 };
-// }
-
-// pub fn registerMouseHoverEnterAction(
-// screen_extent: geometry.Extent2D(ScreenNormalizedBaseType),
-// ) u16 {
-// const attachment_id = addUniqueExtent(screen_extent);
-// return @intCast(u16, registered_events.append(.{
-// .event_type = .mouse_hover_enter,
-// .attachment_id = @intCast(u8, attachment_id),
-// }));
-// }
-
-// pub fn registerMouseHoverExitAction(
-// screen_extent: geometry.Extent2D(ScreenNormalizedBaseType),
-// ) u16 {
-// const attachment_id = addUniqueExtent(screen_extent);
-// return @intCast(u16, registered_events.append(.{
-// .event_type = .mouse_hover_exit,
-// .attachment_id = @intCast(u8, attachment_id),
-// }));
-// }
-
-// pub fn registerPatternMouseLeftPress(pattern: Pattern) u16 {
-// const attachment_id = addUniqueExtent(pattern.extent);
-// _ = pattern_extent_attachments.append(.{
-// .base_extent_index = attachment_id,
-// .horizonal_gap = @floatToInt(u16, pattern.horizonal_gap * @intToFloat(f64, std.math.maxInt(u16))),
-// .vertical_gap = @floatToInt(u16, pattern.vertical_gap * @intToFloat(f64, std.math.maxInt(u16))),
-// .count = @intCast(u8, pattern.count),
-// .row_size = @intCast(u8, pattern.row_size),
-// });
-
-// return @intCast(u16, registered_events.append(.{
-// .event_type = .mouse_button_left_press_pattern,
-// .flags = .{ .use_pattern = true },
-// .attachment_id = @intCast(u8, attachment_id),
-// }));
-// }
-
-// pub fn registerMouseLeftPressAction(
-// screen_extent: geometry.Extent2D(ScreenNormalizedBaseType),
-// ) u16 {
-// const attachment_id = addUniqueExtent(screen_extent);
-// return @intCast(u16, registered_events.append(.{
-// .event_type = .mouse_button_left_press,
-// .attachment_id = @intCast(u8, attachment_id),
-// }));
-// }
-
-// // TODO: This should just take a pre-allocated buffer
-// // TODO: Fix double event trigger from left click
-// pub fn eventsFromMouseUpdate(
-// arena: memory.LinearArena,
-// position: geometry.Coordinates2D(ScreenNormalizedBaseType),
-// button_state: MouseButtonState,
-// ) void {
-// if (registered_events.count == 0) return .{};
-
-// // const arena_begin_checkpoint: u32 = arena.checkpoint();
-
-// // NOTE: arena cannot be used again during this function or it will return
-// //       the same memory.
-// // TODO: Allocate and rewind might be safer
-// var triggered_events = arena.access(EventIndexWithChild);
-// var triggered_event_count: u32 = 0;
-
-// for (registered_events.toSliceMutable()) |*registered_event, event_id| {
-// if (registered_event.flags.use_pattern == true) {
-// events_with_pattern[events_with_pattern_count] = event_id;
-// const pattern = pattern_extent_attachments[registered_event.attachment_id];
-// var child_count: u16 = 0;
-// while (child_count < pattern.count) : (child_count += 1) {
-// const trigger_extent = pattern.extendFor(child_count);
-// const is_within_extent = position.x >= trigger_extent.x and position.x <= (trigger_extent.x + trigger_extent.width) and
-// position.y <= trigger_extent.y and position.y >= (trigger_extent.y - trigger_extent.height);
-// if (is_within_extent) {
-// triggered_events[triggered_event_count] = .{
-// .event = @intCast(u16, event_id),
-// .child_index = child_count,
-// };
-// triggered_event_count += 1;
-// break;
-// }
-// }
-// continue;
-// }
-
-// // NOTE: You could probably make this branchless by writing to the next
-// // element and incrementing the count by is_within_extent (Zero if false)
-// const trigger_extent = extent_attachments.items[registered_event.attachment_id];
-// const is_within_extent = position.x >= trigger_extent.x and position.x <= (trigger_extent.x + trigger_extent.width) and
-// position.y <= trigger_extent.y and position.y >= (trigger_extent.y - trigger_extent.height);
-
-// switch (registered_event.event_type) {
-// .mouse_button_left_press => {
-// if (is_within_extent and button_state.is_left_pressed) {
-// triggered_events[triggered_event_count] = .{ .event = @intCast(u16, event_id) };
-// triggered_event_count += 1;
-// log.info("Mouse left press triggered: {d}", .{event_id});
-// }
-// },
-// .mouse_hover_enter => {
-// if (is_within_extent) {
-// triggered_events[triggered_event_count] = .{ .event = @intCast(u16, event_id) };
-// triggered_event_count += 1;
-// }
-// },
-// .mouse_hover_exit => {
-// if (!is_within_extent) {
-// triggered_events[triggered_event_count] = .{ .event = @intCast(u16, event_id) };
-// triggered_event_count += 1;
-// }
-// },
-// .mouse_hover_reflexive_enter => {
-// if (is_within_extent) {
-// triggered_events[triggered_event_count] = .{ .event = @intCast(u16, event_id) };
-// triggered_event_count += 1;
-// registered_event.event_type = .mouse_hover_reflexive_exit;
-// }
-// },
-// .mouse_hover_reflexive_exit => {
-// if (!is_within_extent) {
-// triggered_events[triggered_event_count] = .{ .event = @intCast(u16, event_id) };
-// triggered_event_count += 1;
-// registered_event.event_type = .mouse_hover_reflexive_enter;
-// }
-// },
-// else => {},
-// }
-// }
-
-// // Ok, using the same event and action id for a pattern is problematic
-// // You should rework it so that it uses a separate id
-// // Maybe sort it to the end for you can still do direct indexing in most cases
-// // Hmm, you're not really allowed to move around indexes during setup..
-// //
-
-// // IDEA: You could hard code some essential subsystems, such as gui
-// //       Just call the function pointers for additional user defined subsystems
-// // TODO: Sort triggers by subsystem and send them as a batch
-// //       (I.e Only call each subsystem function once)
-// for (triggered_events[0..triggered_event_count]) |event, i| {
-// const action = actions[event.event];
-// std.debug.assert(action.subsystem < registered_action_handlers_count);
-// registered_action_handlers[action.subsystem](action, event.child_index);
-// }
-// }
-
-// //
-// // TODO: Move or delete
-// //
-
-// pub fn EnumFromStringList(comptime list: []const u8) type {
-// const EnumField = std.builtin.TypeInfo.EnumField;
-// var fields: []const EnumField = &[_]EnumField{};
-// for (list) |name, list_i| {
-// fields = fields ++ &[_]EnumField{.{
-// .name = name,
-// .value = list_i,
-// }};
-// }
-// return @Type(.{ .Enum = .{
-// .layout = .Auto,
-// .tag_type = u8,
-// .fields = fields,
-// .decls = &[_]std.builtin.TypeInfo.Declaration{},
-// .is_exhaustive = true,
-// } });
-// }

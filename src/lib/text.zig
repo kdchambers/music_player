@@ -101,29 +101,29 @@ pub const GlyphSet = struct {
 };
 
 // TODO: Separate image generation to own function
-pub fn createGlyphSet(allocator: Allocator, character_list: []const u8, texture_dimensions: geometry.Dimensions2D(TexturePixelBaseType)) !GlyphSet {
+pub fn createGlyphSet(
+    allocator: Allocator,
+    font_path: [:0]const u8,
+    character_list: []const u8,
+    texture_dimensions: geometry.Dimensions2D(TexturePixelBaseType),
+) !GlyphSet {
     assert(texture_dimensions.height == 512);
     assert(texture_dimensions.width == 512);
 
-    // TODO:
-    // Use zig stdlib for loading files
-    // Use allocator instead of hardcoded array
-    // Don't use hardcoded system installed font
-    const font_path: [:0]const u8 = "/usr/share/fonts/TTF/Hack-Regular.ttf";
-    var ttf_buffer: [1024 * 300]u8 align(64) = undefined;
+    const file_handle = try std.fs.cwd().openFile(font_path, .{ .mode = .read_only });
+    defer file_handle.close();
 
-    const file_handle = c.fopen(font_path, "rb");
-    if (file_handle == null) {
-        return error.FailedToOpenFontFile;
-    }
+    const file_size = (try file_handle.stat()).size;
 
-    if (c.fread(&ttf_buffer, 1, 1024 * 300, file_handle.?) != (1024 * 300)) {
-        return error.FailedToLoadFont;
-    }
-    _ = c.fclose(file_handle.?);
+    std.log.info("Allocation of {d} bytes", .{file_size});
 
-    assert(font.getFontOffsetForIndex(ttf_buffer[0..], 0) == 0);
-    var font_info = try font.initializeFont(allocator, ttf_buffer[0..]);
+    var ttf_buffer = try allocator.alloc(u8, file_size);
+    _ = try file_handle.readAll(ttf_buffer);
+
+    assert(font.getFontOffsetForIndex(ttf_buffer, 0) == 0);
+    var font_info = try font.initializeFont(allocator, ttf_buffer);
+
+    defer allocator.free(ttf_buffer);
 
     const scale = Scale2D(f32){
         // TODO
@@ -269,9 +269,3 @@ pub fn createGlyphSet(allocator: Allocator, character_list: []const u8, texture_
     return glyph_set;
 }
 
-// pub fn writeText(face_allocator: Allocator, glyph_set: GlyphSet, placement: geometry.Coordinates2D(.ndc_right), scale_factor: ScaleFactor2D, text: []const u8) ![]QuadFace(GenericVertex) {
-// // TODO: Don't hardcode line height to XX pixels
-// const line_height = 18.0 * scale_factor.vertical;
-// const color = RGBA(f32){ .r = 0.8, .g = 0.2, .b = 0.7, .a = 1.0 };
-// return try gui.generateText(GenericVertex, face_allocator, text, placement, scale_factor, glyph_set, color, line_height);
-// }

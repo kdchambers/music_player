@@ -5,14 +5,9 @@
 
 const std = @import("std");
 const builtin = @import("builtin");
-const os = std.os;
-const fs = std.fs;
-const fmt = std.fmt;
-const log = std.log;
-const assert = std.debug.assert;
 const Allocator = std.mem.Allocator;
 const vk = @import("vulkan");
-const vulkan_config = @import("vulkan_config");
+const vulkan_config = @import("vulkan_config.zig");
 const glfw = @import("glfw");
 const text = @import("text");
 const gui = @import("gui");
@@ -35,326 +30,43 @@ const audio = @import("audio");
 const user_config = @import("user_config");
 const QuadFaceWriter = gui.QuadFaceWriter;
 const QuadFaceWriterPool = gui.QuadFaceWriterPool;
-const action = @import("action");
 const ui = @import("ui");
 const theme = @import("Theme.zig").default;
-const LibraryNavigator = @import("LibraryNavigator.zig");
 const navigation = @import("navigation.zig").navigation;
 const storage = @import("storage");
+const SubPath = storage.SubPath;
+const AbsolutePath = storage.AbsolutePath;
+const String = storage.String;
+const Playlist = @import("Playlist.zig");
 
 const shaders = @import("shaders");
 
-const subsystems = struct {
-    const null_value = std.math.maxInt(event_system.SubsystemIndex);
+pub const log_level: std.log.Level = .info;
 
-    var navigation: event_system.SubsystemIndex = null_value;
-    var audio: event_system.SubsystemIndex = null_value;
-    var gui: event_system.SubsystemIndex = null_value;
-};
-
-pub const String = struct {
-    DataType: type = [*]align(2) u8,
-
-    // FORMAT:
-    //
-    // [0] length
-    // [1..N-1] string
-    // [N] null terminator
-
-    // data: [*]align(2) u8,
-
-    pub inline fn write(arena: *memory.LinearArena, string: []const u8) !storage.Pointer(@This().interface) {
-        std.debug.assert(string.len < std.math.maxInt(u8));
-        var data = arena.allocateAligned(u8, 2, @intCast(u16, string.len + 2));
-        data[0] = @intCast(u8, string.len);
-        std.mem.copy(u8, data[1..], string);
-        data[data.len - 1] = 0;
-        const ReturnType: type = storage.Pointer(@This().interface);
-
-        // TODO: Seems to be a required hack. Remove when compiler is fixed
-        var return_value: ReturnType = undefined;
-        return_value.address = arena.indexFor(&data[0]);
-        return return_value;
-        // return ReturnType{
-        // .address = arena.indexFor(&data[0]),
-        // };
-    }
-
-    pub inline fn calculateSpaceRequired(string_len: usize) u16 {
-        return @intCast(u16, string_len) + 2;
-    }
-
-    const interface = struct {
-        Type: type = [*]align(2) const u8,
-        addr: [*]align(2) const u8,
-
-        pub inline fn length(self: @This()) u16 {
-            return @ptrCast(*u16, &self.addr[0]).*;
-        }
-
-        pub inline fn value(self: @This()) []const u8 {
-            const len = self.length();
-            return self.addr[2 .. 2 + len];
-        }
-    };
-};
-
-pub const AbsolutePath = struct {
-    const length_index: u32 = 0;
-    const writable_memory_size_index: u32 = 2;
-    const path_index: u32 = 4;
-
-    Type: type = [*]align(2) u8,
-
-    // data: [*]align(2) u8,
-
-    pub fn write(
-        arena: *memory.LinearArena,
-        path_string: []const u8,
-        reserved_memory_opt: ?u16,
-    ) !storage.Pointer(@This().interface) {
-        var data = arena.allocateAligned(u8, 2, @intCast(u16, path_string.len + 5));
-        @ptrCast(*u16, @alignCast(2, &data[length_index])).* = @intCast(u16, path_string.len);
-        @ptrCast(*u16, @alignCast(2, &data[writable_memory_size_index])).* = reserved_memory_opt orelse 0;
-
-        std.mem.copy(u8, data[path_index..], path_string);
-        data[data.len - 1] = 0;
-
-        if (reserved_memory_opt) |reserved_memory| {
-            _ = arena.allocate(u8, reserved_memory);
-        }
-
-        // TODO: Seems to be a required hack. Remove when compiler is fixed
-        const ReturnType: type = storage.Pointer(@This().interface);
-        var return_value: ReturnType = undefined;
-        return_value.address = arena.indexFor(&data[0]);
-        return return_value;
-
-        // return storage.Pointer(@This().interface){
-        // .address = arena.indexFor(&data[0]),
-        // };
-    }
-
-    const interface = struct {
-        Type: type = [*]align(2) u8,
-        addr: [*]align(2) u8,
-
-        pub inline fn writableSpaceSize(self: @This()) u16 {
-            return @ptrCast(*u16, &self.data[writable_memory_size_index]).*;
-        }
-
-        pub inline fn absolutePath(self: @This(), sub_path: []const u8) ![]const u8 {
-            const writable_space = self.writableSpaceSize();
-            if ((sub_path.len + 1) > writable_space) {
-                return error.InsuffientMemoryAllocated;
-            }
-            const len = self.length();
-            const start_index = path_index + len + 1;
-            self.data[start_index - 1] = '/';
-            var dest_slice = self.data[start_index .. start_index + sub_path.len];
-            std.debug.assert(dest_slice.len == sub_path.len);
-            std.mem.copy(u8, dest_slice, sub_path);
-            return self.data[path_index .. start_index + sub_path.len];
-        }
-
-        // pub inline fn absolutePathBuffer(self: @This(), sub_path: []const u8, output_buffer: []u8) ![]const u8 {
-        // //
-        // }
-
-        pub inline fn length(self: @This()) u16 {
-            return @ptrCast(*u16, &self.addr[length_index]).*;
-        }
-
-        pub inline fn path(self: @This()) []const u8 {
-            const len = self.length();
-            return self.addr[path_index .. path_index + len];
-        }
-    };
-};
-
-pub const SubPath = struct {
-    const parent_path_index_index: u32 = 0;
-    const length_index: u32 = 2;
-    const path_index: u32 = 4;
-
-    pub fn write(
-        arena: *memory.LinearArena,
-        sub_path: []const u8,
-        parent_path: storage.Pointer(AbsolutePath.interface),
-    ) !storage.Pointer(SubPath.interface) {
-        var allocated_memory = arena.allocateAligned(u8, 2, @intCast(u16, sub_path.len + 4));
-        const result_pointer = arena.indexFor(@ptrCast(*u8, allocated_memory.ptr));
-        @ptrCast(
-            *storage.Pointer(AbsolutePath.interface),
-            @alignCast(2, &allocated_memory[parent_path_index_index]),
-        ).* = parent_path;
-        @ptrCast(*u16, @alignCast(2, &allocated_memory[length_index])).* = @intCast(u16, sub_path.len);
-        std.mem.copy(u8, allocated_memory[path_index..], sub_path);
-
-        // TODO: Seems to be a required hack. Remove when compiler is fixed
-        const ReturnType: type = storage.Pointer(@This().interface);
-        var return_value: ReturnType = undefined;
-        return_value.address = result_pointer;
-        return return_value;
-
-        // return storage.Pointer(SubPath.interface){
-        // .address = result_pointer,
-        // };
-    }
-
-    pub const interface = struct {
-        Type: type = [*]align(2) u8,
-        addr: [*]align(2) u8,
-
-        pub inline fn length(self: @This()) u16 {
-            return @ptrCast(*u16, &self.addr[length_index]).*;
-        }
-
-        pub inline fn path(self: @This()) []const u8 {
-            const len = self.length();
-            return self.addr[path_index .. path_index + len];
-        }
-
-        pub inline fn absolutePath(self: @This()) ![]const u8 {
-            const parent_path = @ptrCast(*storage.Pointer(AbsolutePath.interface), &self.addr[parent_path_index_index]).*;
-            return try parent_path.absolutePath(self.path());
-        }
-    };
-};
-
-pub const TrackViewModel = struct {
-    const TrackViewModelEntry = struct {
-        title: storage.Pointer(String.interface),
-        artist: storage.Pointer(String.interface),
-        path: storage.Pointer(SubPath.interface),
-    };
-
-    pub const interface = struct {
-        Type: type = [*]align(2) u8,
-        addr: @This().Type,
-    };
-
-    track_entry_count: u16,
-    parent_path: storage.Pointer(AbsolutePath.interface),
-    // track_list: []TrackViewModelEntry,
-
-    pub fn getTrackFilename(self: @This(), index: u8) []const u8 {
-        std.debug.assert(index < self.entry_count);
-        const entry_list = @intToPtr([*]TrackViewModelEntry, @ptrToInt(&self) + @sizeOf(@This()))[0..self.entry_count];
-        return entry_list[index].path();
-    }
-
-    pub fn parseExtension(file_name: []const u8) ![]const u8 {
-        std.debug.assert(file_name.len > 0);
-        if (file_name.len <= 4) {
-            return error.NoExtension;
-        }
-
-        var i: usize = file_name.len - 1;
-        while (i > 0) : (i -= 1) {
-            if (file_name[i] == '.') {
-                return file_name[i + 1 ..];
-            }
-        }
-        return error.NoExtension;
-    }
-
-    pub fn matchExtension(extension: []const u8, string: []const u8) bool {
-        if (string.len < extension.len) return false;
-        for (extension) |char, i| {
-            if (char != std.ascii.toUpper(string[i])) {
-                return false;
-            }
-        }
-        return true;
-    }
-
-    pub fn log(self: @This()) void {
-        const parent_path_interface = self.parent_path.get();
-        std.log.info("Parent path: {s}", .{parent_path_interface.path()});
-        std.log.info("Tracks: {d}", .{self.track_entry_count});
-    }
-
-    pub fn create(
-        arena: *memory.LinearArena,
-        directory: std.fs.Dir,
-        entry_offset: u32,
-        max_entries: u16,
-    ) !*TrackViewModel {
-        _ = entry_offset;
-
-        var head = arena.create(TrackViewModel);
-        head.track_entry_count = 0;
-
-        var output_buffer: [512]u8 = undefined;
-        const source_parent_path = try directory.realpath(".", output_buffer[0..]);
-        head.parent_path = try AbsolutePath.write(arena, source_parent_path, 256);
-
-        var track_entries = arena.allocate(TrackViewModelEntry, max_entries);
-        var iterator = directory.iterate();
-        while (try iterator.next()) |entry| {
-            if (head.track_entry_count >= max_entries) {
-                std.log.warn("Hit max playlist size ({d}). Some tracks may be ignored", .{max_entries});
-                break;
-            }
-            if (entry.kind == .File) {
-                const extension = parseExtension(entry.name) catch "";
-                if (matchExtension("MP3", extension) or matchExtension("FLAC", extension)) {
-                    track_entries[head.track_entry_count].path = try SubPath.write(arena, entry.name, head.parent_path);
-                    track_entries[head.track_entry_count].title = .{ .address = storage.nullptr };
-                    track_entries[head.track_entry_count].artist = .{ .address = storage.nullptr };
-                    head.track_entry_count += 1;
-                }
-            }
-        }
-
-        // TODO: Assert no gap between head and entries
-        return head;
-    }
-};
-
+// TODO
 //
-// CONTENTS:
-//
-// - Globals
-// - Memory layout
-// - Core functions
-// - Event handlers
-// - Vulkan functions
-//
-
-//
-// Memory Arena Layout
-//
-// [Static]
-//
-// - Colors
-// - Unscaled layouts
-//
-// [Page]
-//
-// - Directory list
-// - Audio metadata list
-// - Inactive vertices
-// - Vertices ranges
-// - Extent list (Share with layout ?)
-// - Event bindings
-//
-// [Function]
-//
-// - misc
-
-//
-// Page allocated
-//
-// audio buffer
-//
+// - Reset progress bar after track finishes
+// - Reclick on directory item doesn't reload anything
+// - Don't reload track duration if available
+// - Indicator of track playing
+// - Show track details on side
+// - How time markers beside progress bar
+// - [done] Next and previous buttons
+// - Update example library to have albums
+// - Next track will automatically play
+// - Get flac to work again
+// - Calculate # directories to load based on available space
+// - Build libmad into binary
+// - Fix memory leak in audio.mp3.playFile
 
 var is_render_requested: bool = true;
-var current_audio_index: u16 = 0;
+var is_draw_required: bool = true;
+
 var quad_face_writer_pool: QuadFaceWriterPool(GenericVertex) = undefined;
-var main_arena = memory.LinearArena{};
-var directory_list: [][]const u8 = undefined;
+
+var main_arena: memory.LinearArena = .{};
+var trackview_arena: memory.LinearArena = undefined;
+
 const ScreenScaleFactor = graphics.ScreenScaleFactor(
     .{
         .NDCRightType = ScreenNormalizedBaseType,
@@ -362,22 +74,6 @@ const ScreenScaleFactor = graphics.ScreenScaleFactor(
     },
 );
 var scale_factor: ScreenScaleFactor = undefined;
-var track_metadatas: FixedBuffer(audio.TrackMetadata, 20) = undefined;
-
-//
-// Events
-//
-
-var on_media_toggle_clicked: u32 = 0;
-var media_button_face_index: u16 = 0;
-
-//
-// For each arena, you need a list of checkpoints
-//
-
-// Actions that invalidate memory
-// Directory changed
-// Track changed
 
 const RewindLevel = enum(u8) {
     directory_changed = 0,
@@ -403,8 +99,6 @@ const AudioDurationTime = packed struct {
 
 var rewind_points: RewindPoints = .{};
 
-// Globals
-
 var screen_dimensions = geometry.Dimensions2D(ScreenPixelBaseType){
     .width = 0,
     .height = 0,
@@ -412,7 +106,6 @@ var screen_dimensions = geometry.Dimensions2D(ScreenPixelBaseType){
 
 var current_frame: u32 = 0;
 var framebuffer_resized: bool = true;
-var is_draw_required: bool = true;
 var mapped_device_memory: [*]u8 = undefined;
 const max_texture_quads_per_render: u32 = 1024 * 2;
 
@@ -435,8 +128,8 @@ var vertex_buffer: []QuadFace(GenericVertex) = undefined;
 //       All it does it let us determine the number of indices to render
 var vertex_buffer_count: u32 = 0;
 
-const enable_validation_layers = if (builtin.mode == .Debug) true else false;
-const validation_layers = if (enable_validation_layers) [_][*:0]const u8{"VK_LAYER_KHRONOS_validation"} else [*:0]const u8{};
+const enable_validation_layers = false; // if (builtin.mode == .Debug) true else false;
+const validation_layers = if (enable_validation_layers) [1][*:0]const u8{"VK_LAYER_KHRONOS_validation"} else [*:0]const u8{};
 const device_extensions = [_][*:0]const u8{vk.extension_info.khr_swapchain.name};
 
 const max_frames_in_flight: u32 = 2;
@@ -446,43 +139,23 @@ var texture_image: vk.Image = undefined;
 var texture_vertices_buffer: vk.Buffer = undefined;
 var texture_indices_buffer: vk.Buffer = undefined;
 
-// TODO: Take library path as input
-//       Default to assets/example_library
-const help_message =
-    \\music_player [<options>] [<filename>]
-    \\options:
-    \\    --help: display this help message
-    \\
-;
-
 // NOTE: For development
 // const library_root_path = "../../../../mnt/data/media/music";
 
 // TODO: You can define this with a env variable
 const library_root_path = "assets/example_library";
-var library_navigator: LibraryNavigator = undefined;
-var track_metadatas_opt: ?[]audio.TrackMetadataIndices = null;
-var audio_files: FixedBuffer([:0]const u8, 20) = undefined;
 var image_memory_map: [*]u8 = undefined;
 var texture_size_bytes: usize = 0;
-var audio_progress_label_faces_quad_index: u16 = undefined;
-var audio_progress_bar_faces_quad_index: u16 = undefined;
-var media_button_toggle_audio_action_id: u32 = undefined;
-const parent_directory_id = std.math.maxInt(u16);
-var update_media_icon_action_id_opt: ?u32 = null;
 
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
 
     navigation.subsystem_index = event_system.registerActionHandler(navigation.doAction);
-
-    subsystems.audio = event_system.registerActionHandler(audio.doAction);
-    subsystems.gui = event_system.registerActionHandler(gui.doAction);
-
-    std.debug.assert(navigation.subsystem_index == 0);
-    std.debug.assert(subsystems.audio == 1);
-    std.debug.assert(subsystems.gui == 2);
+    audio.subsystem_index = event_system.registerActionHandler(audio.doAction);
+    gui.subsystem_index = event_system.registerActionHandler(gui.doAction);
+    ui.subsystem_index = event_system.registerActionHandler(ui.doAction);
+    Playlist.subsystem_index = event_system.registerActionHandler(Playlist.doAction);
 
     var allocator = gpa.allocator();
 
@@ -491,9 +164,16 @@ pub fn main() !void {
         var page_allocator = std.heap.page_allocator;
         var main_arena_memory = try page_allocator.alloc(u8, bytes_per_kib * 64);
         main_arena.init(main_arena_memory);
+        storage.init(main_arena.access()[0..]);
     }
 
     event_system.mouse_event_writer.init(&main_arena, 1024);
+
+    {
+        const path_size_max: u32 = 256;
+        const loaded_directories_max: u32 = 32;
+        trackview_arena = main_arena.allocateChild(2, path_size_max * loaded_directories_max * 2);
+    }
 
     {
         arena_checkpoints[@enumToInt(RewindLevel.directory_changed)] = main_arena.checkpoint();
@@ -501,42 +181,33 @@ pub fn main() !void {
         try navigation.init(&main_arena, current_directory);
     }
 
-    //
-    // Load all media items in the library root directory
-    //
-
-    var graphics_context: GraphicsContext = undefined;
-
     glfw.initialize() catch |err| {
-        log.err("Failed to initialized glfw. Error: {}", .{err});
+        std.log.err("Failed to initialized glfw. Error: {}", .{err});
         return;
     };
     defer glfw.terminate();
 
     if (!glfw.vulkanSupported()) {
-        log.err("Vulkan is required", .{});
+        std.log.err("Vulkan is required", .{});
         return;
     }
 
-    std.log.info("Initialized", .{});
     glfw.setHint(.client_api, .none);
+
+    var graphics_context: GraphicsContext = undefined;
     graphics_context.window = try glfw.createWindow(constants.initial_window_dimensions, constants.application_title);
 
     const window_size = glfw.getFramebufferSize(graphics_context.window);
-
     graphics_context.screen_dimensions.width = window_size.width;
     graphics_context.screen_dimensions.height = window_size.height;
 
-    assert(window_size.width < 10_000 and window_size.height < 10_000);
+    std.debug.assert(window_size.width < 10_000 and window_size.height < 10_000);
 
-    const vk_proc = @ptrCast(*const fn (instance: vk.Instance, procname: [*:0]const u8) callconv(.C) vk.PfnVoidFunction, &glfw.getInstanceProcAddress);
-    graphics_context.base_dispatch = try BaseDispatch.load(vk_proc);
+    graphics_context.base_dispatch = try vulkan_config.BaseDispatch.load(&glfw.glfwGetInstanceProcAddress);
 
-    const instance_extension = try zvk.glfwGetRequiredInstanceExtensions();
-
-    for (instance_extension) |extension| {
-        std.log.info("Extension: {s}", .{extension});
-    }
+    var instance_extension_count: u32 = 0;
+    const instance_extensions = glfw.getRequiredInstanceExtensions(&instance_extension_count);
+    std.debug.assert(instance_extension_count > 0);
 
     graphics_context.instance = try graphics_context.base_dispatch.createInstance(&vk.InstanceCreateInfo{
         .s_type = .instance_create_info,
@@ -546,18 +217,20 @@ pub fn main() !void {
             .application_version = vk.makeApiVersion(0, 0, 1, 0),
             .p_engine_name = constants.application_title,
             .engine_version = vk.makeApiVersion(0, 0, 1, 0),
-            .api_version = vk.makeApiVersion(1, 2, 0, 0),
+            .api_version = vk.API_VERSION_1_2,
             .p_next = null,
         },
-        .enabled_extension_count = @intCast(u32, instance_extension.len),
-        .pp_enabled_extension_names = instance_extension.ptr,
+        .enabled_extension_count = instance_extension_count,
+        .pp_enabled_extension_names = @ptrCast([*]const [*:0]const u8, instance_extensions),
         .enabled_layer_count = if (enable_validation_layers) validation_layers.len else 0,
         .pp_enabled_layer_names = if (enable_validation_layers) &validation_layers else undefined,
         .p_next = null,
         .flags = .{},
     }, null);
 
-    graphics_context.instance_dispatch = try InstanceDispatch.load(graphics_context.instance, vk_proc);
+    graphics_context.instance_dispatch = try vulkan_config.InstanceDispatch.load(graphics_context.instance, glfw.glfwGetInstanceProcAddress);
+    errdefer graphics_context.instance_dispatch.destroyInstance(graphics_context.instance, null);
+
     _ = try glfw.createWindowSurface(graphics_context.instance, graphics_context.window, &graphics_context.surface);
 
     var present_mode: vk.PresentModeKHR = .fifo_khr;
@@ -583,11 +256,11 @@ pub fn main() !void {
         // defer allocator.free(physical_devices);
 
         for (physical_devices) |physical_device| {
-            if ((try zvk.deviceSupportsExtensions(InstanceDispatch, graphics_context.instance_dispatch, allocator, physical_device, device_extensions[0..])) and
-                (try zvk.getPhysicalDeviceSurfaceFormatsKHRCount(InstanceDispatch, graphics_context.instance_dispatch, physical_device, graphics_context.surface)) != 0 and
-                (try zvk.getPhysicalDeviceSurfacePresentModesKHRCount(InstanceDispatch, graphics_context.instance_dispatch, physical_device, graphics_context.surface)) != 0)
+            if ((try zvk.deviceSupportsExtensions(vulkan_config.InstanceDispatch, graphics_context.instance_dispatch, allocator, physical_device, device_extensions[0..])) and
+                (try zvk.getPhysicalDeviceSurfaceFormatsKHRCount(vulkan_config.InstanceDispatch, graphics_context.instance_dispatch, physical_device, graphics_context.surface)) != 0 and
+                (try zvk.getPhysicalDeviceSurfacePresentModesKHRCount(vulkan_config.InstanceDispatch, graphics_context.instance_dispatch, physical_device, graphics_context.surface)) != 0)
             {
-                var supported_present_modes = try zvk.getPhysicalDeviceSurfacePresentModesKHR(InstanceDispatch, graphics_context.instance_dispatch, allocator, physical_device, graphics_context.surface);
+                var supported_present_modes = try zvk.getPhysicalDeviceSurfacePresentModesKHR(vulkan_config.InstanceDispatch, graphics_context.instance_dispatch, allocator, physical_device, graphics_context.surface);
                 defer allocator.free(supported_present_modes);
 
                 // FIFO should be guaranteed by vulkan spec but validation layers are triggered
@@ -606,7 +279,7 @@ pub fn main() !void {
 
                     const max_family_queues: u32 = 16;
                     if (queue_family_count > max_family_queues) {
-                        log.warn("Some family queues for selected device ignored", .{});
+                        std.log.warn("Some family queues for selected device ignored", .{});
                     }
 
                     var queue_families: [max_family_queues]vk.QueueFamilyProperties = undefined;
@@ -727,7 +400,7 @@ pub fn main() !void {
         );
     }
 
-    graphics_context.device_dispatch = try DeviceDispatch.load(
+    graphics_context.device_dispatch = try vulkan_config.DeviceDispatch.load(
         graphics_context.logical_device,
         graphics_context.instance_dispatch.dispatch.vkGetDeviceProcAddr,
     );
@@ -738,7 +411,7 @@ pub fn main() !void {
     );
 
     var available_formats: []vk.SurfaceFormatKHR = try zvk.getPhysicalDeviceSurfaceFormatsKHR(
-        InstanceDispatch,
+        vulkan_config.InstanceDispatch,
         graphics_context.instance_dispatch,
         allocator,
         graphics_context.physical_device,
@@ -759,7 +432,7 @@ pub fn main() !void {
     cleanupSwapchain(allocator, &graphics_context);
     clean(allocator, &graphics_context);
 
-    log.info("Terminated cleanly", .{});
+    std.log.info("Terminated cleanly", .{});
 }
 
 // TODO:
@@ -783,13 +456,13 @@ fn recreateSwapchain(allocator: Allocator, app: *GraphicsContext) !void {
     // TODO: Find a better synchronization method
     try app.device_dispatch.deviceWaitIdle(app.logical_device);
 
-    log.info("Recreating swapchain", .{});
+    std.log.info("Recreating swapchain", .{});
 
     //
     // Cleanup swapchain and associated images
     //
 
-    assert(app.command_buffers.len > 0);
+    std.debug.assert(app.command_buffers.len > 0);
 
     app.device_dispatch.freeCommandBuffers(
         app.logical_device,
@@ -824,7 +497,7 @@ fn recreateSwapchain(allocator: Allocator, app: *GraphicsContext) !void {
 
     // TODO
     const available_formats: []vk.SurfaceFormatKHR = try zvk.getPhysicalDeviceSurfaceFormatsKHR(
-        InstanceDispatch,
+        vulkan_config.InstanceDispatch,
         app.instance_dispatch,
         allocator,
         app.physical_device,
@@ -912,136 +585,69 @@ fn recreateSwapchain(allocator: Allocator, app: *GraphicsContext) !void {
 
     app.command_buffers = try allocateCommandBuffers(allocator, app.*, @intCast(u32, app.swapchain_images.len));
     try recordRenderPass(app.*, vertex_buffer_count * 6);
-
-    log.info("Swapchain recreated", .{});
 }
 
 fn setupApplication(allocator: Allocator, app: *GraphicsContext) !void {
-    // const large_image = try zigimg.Image.fromFilePath(allocator, "/home/keith/projects/zv_widgets_1/assets/pastal_castle.png");
-    // defer large_image.deinit();
-
-    // log.info("Load image format: {}", .{large_imageScreenPixelBaseType_format});
-    // const formatted_image: []RGBA(f32) = blk: {
-    // switch (large_imageScreenPixelBaseType_format) {
-    // .Rgba32 => break :blk try image.convertImageRgba32(allocator, large_imageScreenPixelBaseTypes.?.Rgba32),
-    // .Rgb24 => break :blk try image.convertImageRgb24(allocator, large_imageScreenPixelBaseTypes.?.Rgb24),
-    // // TODO: Handle this error properly
-    // else => unreachable,
-    // }
-    // unreachable;
-    // };
-    // defer allocator.free(formatted_image);
-
-    // const horizontal_difference: f32 = @intToFloat(f32, texture_layer_dimensions.width) / @intToFloat(f32, large_image.width);
-    // const vertical_difference: f32 = @intToFloat(f32, texture_layer_dimensions.height) / @intToFloat(f32, large_image.height);
-    // const scale_factor: f32 = if (horizontal_difference < vertical_difference) horizontal_difference else vertical_difference;
-
-    // const fitted_dimensions = geometry.Dimensions2D(TexturePixelBaseType){
-    // .width = 256, //if (scale_factor < 1.0) @floatToInt(u32, @intToFloat(f32, large_image.width) * scale_factor) else @intCast(u32, large_image.width),
-    // .height = 256, // if (scale_factor < 1.0) @floatToInt(u32, @intToFloat(f32, large_image.height) * scale_factor) else @intCast(u32, large_image.height),
-    // };
-
-    // const old_dimensions = geometry.Dimensions2D(TexturePixelBaseType){
-    // .width = @intCast(u32, large_image.width),
-    // .height = @intCast(u32, large_image.height),
-    // };
-
-    // TODO: I need to make a function to add and remove images as textures
-    // It will be able to return the texture dimensions so that it can be drawn seperately
-    // addTexture()
-
-    // log.info("Shrinking image: {d}x{d} --> {d}x{d}", .{ old_dimensions.width, old_dimensions.height, fitted_dimensions.width, fitted_dimensions.height });
-
-    // const fitted_image = try image.shrink(allocator, formatted_image, old_dimensions, fitted_dimensions);
-    // defer allocator.free(fitted_image);
-
-    // var texture_layer = try allocator.alloc(RGBA(f32), texture_layer_dimensions.width * texture_layer_dimensions.height);
-    // defer allocator.free(texture_layer);
-    // for (texture_layer) |ScreenPixelBaseType| {
-    //ScreenPixelBaseType.r = 1.0;
-    //ScreenPixelBaseType.g = 1.0;
-    //ScreenPixelBaseType.b = 1.0;
-    //ScreenPixelBaseType.a = 1.0;
-    // }
-
-    // assert(fitted_image.len == (fitted_dimensions.width * fitted_dimensions.height));
-
-    // const image_crop_dimensions = geometry.Extent2D(TexturePixelBaseType){
-    // .x = 0,
-    // .y = 0,
-    // .width = 100,
-    // .height = 170,
-    // };
-
-    // const image_initial_dimensions = geometry.Dimensions2D(TexturePixelBaseType){
-    // .width = @intCast(u32, large_image.width),
-    // .height = @intCast(u32, large_image.height),
-    // };
-
-    // const processed_image = try shrinkImage(allocator, _converted_image, image_initial_dimensions, .{ .width = large_image.width, .height = large_image.height });
-    // defer allocator.free(processed_image);
-
     const font_texture_chars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!\"£$%^&*()-_=+[]{};:'@#~,<.>/?\\|";
-    glyph_set = try text.createGlyphSet(allocator, font_texture_chars[0..], texture_layer_dimensions);
+    glyph_set = try text.createGlyphSet(allocator, constants.default_font_path, font_texture_chars[0..], texture_layer_dimensions);
 
-    //
-    // TODO
-    //
-
-    // var debugging_font_bitmap_texture = try allocator.alloc(RGBA(f32), texture_layer_dimensions.width * texture_layer_dimensions.height);
-    // defer allocator.free(debugging_font_bitmap_texture);
-
-    // {
-    // const source_image_extent = geometry.Extent2D(TexturePixelBaseType){
-    // .x = 0,
-    // .y = 0,
-    // .width = @intCast(u32, fitted_dimensions.width),
-    // .height = @intCast(u32, fitted_dimensions.height),
-    // };
-
-    // log.info("Image dimensions: {d}x{d}", .{ large_image.width, large_image.height });
-
-    // const destination_placement = geometry.Coordinates2D(TexturePixelBaseType){
-    // .x = 0,
-    // .y = 0,
-    // };
-
-    // const destination_dimensions = geometry.Dimensions2D(TexturePixelBaseType){
-    // .width = texture_layer_dimensions.width,
-    // .height = texture_layer_dimensions.height,
-    // };
-
-    // image.copy(RGBA(f32), fitted_image, source_image_extent, &texture_layer, destination_placement, destination_dimensions);
-    // }
-
+    const memory_properties = app.instance_dispatch.getPhysicalDeviceMemoryProperties(app.physical_device);
     // var memory_properties = zvk.getDevicePhysicalMemoryProperties(app.physical_device);
-    // zvk.logDevicePhysicalMemoryProperties(memory_properties);
+    zvk.logDevicePhysicalMemoryProperties(memory_properties);
+
+    const mesh_memory_index: u32 = blk: {
+
+        // Find the best memory type for storing mesh + texture data
+        // Requirements:
+        //   - Sufficient space (20mib)
+        //   - Host visible (Host refers to CPU. Allows for direct access without needing DMA)
+        // Preferable
+        //  - Device local (Memory on the GPU / APU)
+
+        const kib: u32 = 1024;
+        const mib: u32 = kib * 1024;
+        const minimum_space_required: u32 = mib * 20;
+
+        var memory_type_index: u32 = 0;
+        var memory_type_count = memory_properties.memory_type_count;
+
+        var suitable_memory_type_index_opt: ?u32 = null;
+
+        while (memory_type_index < memory_type_count) : (memory_type_index += 1) {
+            const memory_entry = memory_properties.memory_types[memory_type_index];
+            const heap_index = memory_entry.heap_index;
+
+            if (heap_index == memory_properties.memory_heap_count) {
+                std.log.warn("Invalid heap index {d} for memory type at index {d}. Skipping", .{ heap_index, memory_type_index });
+                continue;
+            }
+
+            const heap_size = memory_properties.memory_heaps[heap_index].size;
+
+            if (heap_size < minimum_space_required) {
+                continue;
+            }
+
+            const memory_flags = memory_entry.property_flags;
+            if (memory_flags.host_visible_bit) {
+                suitable_memory_type_index_opt = memory_type_index;
+                if (memory_flags.device_local_bit) {
+                    break :blk memory_type_index;
+                }
+            }
+        }
+
+        if (suitable_memory_type_index_opt) |suitable_memory_type_index| {
+            break :blk suitable_memory_type_index;
+        }
+
+        return error.NoValidVulkanMemoryTypes;
+    };
+
+    std.log.info("Memory type selected: {d}", .{mesh_memory_index});
 
     var texture_width: u32 = glyph_set.width();
     var texture_height: u32 = glyph_set.height();
-
-    log.info("Glyph dimensions: {}x{}", .{ texture_width, texture_height });
-
-    // const font_bitmap_extent = geometry.Extent2D(TexturePixelBaseType){
-    // .x = 0,
-    // .y = 0,
-    // .width = texture_width,
-    // .height = texture_height,
-    // };
-
-    // const formatted_image_dimensions = geometry.Dimensions2D(TexturePixelBaseType){
-    // .width = @intCast(u32, large_image.width),
-    // .height = @intCast(u32, large_image.height),
-    // };
-
-    // const cropped_image = try cropImage(allocator, formatted_image, formatted_image_dimensions, font_bitmap_extent);
-    // defer allocator.free(cropped_image);
-
-    // texture_size_bytes = glyph_set.image.len * @sizeOf(RGBA(f32));
-    // texture_size_bytes = texture_dimensions.height * texture_dimensions.width * @sizeOf(RGBA(f32));
-    // assert(glyph_set.image.len == (texture_width * texture_height));
-
-    // assert(texture_size_bytes == (texture_width * texture_height * @sizeOf(RGBA(f32))));
 
     {
         const image_create_info = vk.ImageCreateInfo{
@@ -1075,7 +681,7 @@ fn setupApplication(allocator: Allocator, app: *GraphicsContext) !void {
         .s_type = vk.StructureType.memory_allocate_info,
         .p_next = null,
         .allocation_size = texture_memory_requirements.size,
-        .memory_type_index = 0,
+        .memory_type_index = mesh_memory_index,
     }, null);
 
     try app.device_dispatch.bindImageMemory(app.logical_device, texture_image, image_memory, 0);
@@ -1087,7 +693,7 @@ fn setupApplication(allocator: Allocator, app: *GraphicsContext) !void {
         .queue_family_index = app.graphics_present_queue_index,
     }, null);
 
-    var command_buffer = try zvk.allocateCommandBuffer(DeviceDispatch, app.device_dispatch, app.logical_device, vk.CommandBufferAllocateInfo{
+    var command_buffer = try zvk.allocateCommandBuffer(vulkan_config.DeviceDispatch, app.device_dispatch, app.logical_device, vk.CommandBufferAllocateInfo{
         .s_type = vk.StructureType.command_buffer_allocate_info,
         .p_next = null,
         .level = .primary,
@@ -1109,7 +715,7 @@ fn setupApplication(allocator: Allocator, app: *GraphicsContext) !void {
     //       Instead of the uploaded memory
     const is_staging_buffer_required: bool = false;
     if (is_staging_buffer_required) {
-        assert(false);
+        std.debug.assert(false);
 
         var staging_buffer: vk.Buffer = try zvk.createBuffer(app.logical_device, .{
             .p_next = null,
@@ -1199,6 +805,7 @@ fn setupApplication(allocator: Allocator, app: *GraphicsContext) !void {
     } else {
         // TODO: texture_size_bytes * 2
 
+        std.debug.assert(texture_layer_size * 2 <= texture_memory_requirements.size);
         image_memory_map = @ptrCast([*]u8, (try app.device_dispatch.mapMemory(app.logical_device, image_memory, 0, texture_layer_size * 2, .{})).?);
 
         // if (.success != vk.vkMapMemory(app.logical_device, image_memory, 0, texture_layer_size * 2, 0, @ptrCast(?**anyopaque, &image_memory_map))) {
@@ -1243,7 +850,6 @@ fn setupApplication(allocator: Allocator, app: *GraphicsContext) !void {
         const dependency_flags = vk.DependencyFlags{};
         app.device_dispatch.cmdPipelineBarrier(command_buffer, src_stage, dst_stage, dependency_flags, 0, undefined, 0, undefined, 1, &barrier);
     }
-    // }
 
     try app.device_dispatch.endCommandBuffer(command_buffer);
 
@@ -1279,12 +885,8 @@ fn setupApplication(allocator: Allocator, app: *GraphicsContext) !void {
     const surface_capabilities: vk.SurfaceCapabilitiesKHR = try app.instance_dispatch.getPhysicalDeviceSurfaceCapabilitiesKHR(app.physical_device, app.surface);
 
     if (surface_capabilities.current_extent.width == 0xFFFFFFFF or surface_capabilities.current_extent.height == 0xFFFFFFFF) {
-        log.info("Getting framebuffer size", .{});
-
         const window_size = glfw.getFramebufferSize(app.window);
-        log.info("Screen size: {d}x{d}", .{ window_size.width, window_size.height });
-
-        assert(window_size.width < 10_000 and window_size.height < 10_000);
+        std.debug.assert(window_size.width < 10_000 and window_size.height < 10_000);
 
         if (window_size.width <= 0 or window_size.height <= 0) {
             return error.InvalidScreenDimensions;
@@ -1318,9 +920,7 @@ fn setupApplication(allocator: Allocator, app: *GraphicsContext) !void {
         .p_next = null,
     }, null);
 
-    app.swapchain_images = try zvk.getSwapchainImagesKHR(DeviceDispatch, app.device_dispatch, allocator, app.logical_device, app.swapchain);
-
-    log.info("Swapchain images: {d}", .{app.swapchain_images.len});
+    app.swapchain_images = try zvk.getSwapchainImagesKHR(vulkan_config.DeviceDispatch, app.device_dispatch, allocator, app.logical_device, app.swapchain);
 
     // TODO: Duplicated code
     app.swapchain_image_views = try allocator.alloc(vk.ImageView, app.swapchain_images.len);
@@ -1350,14 +950,14 @@ fn setupApplication(allocator: Allocator, app: *GraphicsContext) !void {
         image_view.* = try app.device_dispatch.createImageView(app.logical_device, &image_view_create_info, null);
     }
 
-    assert(vertices_range_index_begin + vertices_range_size <= memory_size);
+    std.debug.assert(vertices_range_index_begin + vertices_range_size <= memory_size);
 
     // Memory used to store vertices and indices
 
     var mesh_memory = try app.device_dispatch.allocateMemory(app.logical_device, &vk.MemoryAllocateInfo{
         .s_type = vk.StructureType.memory_allocate_info,
         .allocation_size = memory_size,
-        .memory_type_index = 0, // TODO: Audit
+        .memory_type_index = mesh_memory_index,
         .p_next = null,
     }, null);
 
@@ -1401,9 +1001,6 @@ fn setupApplication(allocator: Allocator, app: *GraphicsContext) !void {
         try app.device_dispatch.bindBufferMemory(app.logical_device, texture_indices_buffer, mesh_memory, indices_range_index_begin);
     }
 
-    // texture_vertices_buffer = try zvk.createBufferOnMemory(app.logical_device, vertices_range_size, vertices_range_index_begin, .{ .transferDst = true, .vertexBuffer = true }, mesh_memory);
-    // texture_indices_buffer = try zvk.createBufferOnMemory(app.logical_device, indices_range_size, indices_range_index_begin, .{ .transferDst = true, .indexBuffer = true }, mesh_memory);
-
     mapped_device_memory = @ptrCast([*]u8, (try app.device_dispatch.mapMemory(app.logical_device, mesh_memory, 0, memory_size, .{})).?);
 
     {
@@ -1414,7 +1011,7 @@ fn setupApplication(allocator: Allocator, app: *GraphicsContext) !void {
 
         const vertices_base = @ptrCast([*]GenericVertex, @alignCast(alignment, &mapped_device_memory[vertices_range_index_begin]));
         const vertex_buffer_capacity = vertices_range_size / @sizeOf(GenericVertex);
-        gui.init(&main_arena, subsystems.gui, vertices_base[0..vertex_buffer_capacity]);
+        gui.init(vertices_base[0..vertex_buffer_capacity]);
     }
 
     // if (vk.vkMapMemory(app.logical_device, mesh_memory, 0, memory_size, 0, @ptrCast(**anyopaque, &mapped_device_memory)) != .success) {
@@ -1474,7 +1071,7 @@ fn setupApplication(allocator: Allocator, app: *GraphicsContext) !void {
     app.vertex_shader_module = try createVertexShaderModule(app.*);
     app.fragment_shader_module = try createFragmentShaderModule(app.*);
 
-    assert(app.swapchain_images.len > 0);
+    std.debug.assert(app.swapchain_images.len > 0);
     app.command_buffers = try allocateCommandBuffers(allocator, app.*, @intCast(u32, app.swapchain_images.len));
 
     app.render_pass = try createRenderPass(app.*);
@@ -1487,243 +1084,8 @@ fn setupApplication(allocator: Allocator, app: *GraphicsContext) !void {
     app.framebuffers = try createFramebuffers(allocator, app.*);
 }
 
-fn swapTexture(app: *GraphicsContext) !void {
-    log.info("SwapTexture begin", .{});
-
-    const command_pool = try zvk.createCommandPool(app.logical_device, vk.CommandPoolCreateInfo{
-        .s_type = vk.StructureType.COMMAND_POOL_CREATE_INFO,
-        .p_next = null,
-        .flags = .{ .resetCommandBuffer = true },
-        .queueFamilyIndex = app.graphics_present_queue_index,
-    });
-
-    {
-        var command_buffer = try zvk.allocateCommandBuffer(app.logical_device, vk.CommandBufferAllocateInfo{
-            .s_type = vk.StructureType.COMMAND_BUFFER_ALLOCATE_INFO,
-            .p_next = null,
-            .level = .PRIMARY,
-            .commandPool = command_pool,
-            .commandBufferCount = 1,
-        });
-
-        try zvk.beginCommandBuffer(command_buffer, .{
-            .s_type = vk.StructureType.COMMAND_BUFFER_BEGIN_INFO,
-            .p_next = null,
-            .flags = .{ .oneTimeSubmit = true },
-            .pInheritanceInfo = null,
-        });
-
-        {
-            const barrier = [_]vk.ImageMemoryBarrier{
-                .{
-                    .s_type = vk.StructureType.IMAGE_MEMORY_BARRIER,
-                    .p_next = null,
-                    .srcAccessMask = .{},
-                    .dstAccessMask = .{ .shaderRead = true },
-                    .oldLayout = .SHADER_READ_ONLY_OPTIMAL,
-                    .newLayout = .GENERAL,
-                    .srcQueueFamilyIndex = vk.QUEUE_FAMILY_IGNORED,
-                    .dstQueueFamilyIndex = vk.QUEUE_FAMILY_IGNORED,
-                    .image = texture_image,
-                    .subresourceRange = .{
-                        .aspectMask = .{ .color = true },
-                        .baseMipLevel = 0,
-                        .levelCount = 1,
-                        .baseArrayLayer = 0,
-                        .layerCount = 2,
-                    },
-                },
-            };
-
-            const src_stage = @bitCast(u32, vk.PipelineStageFlags{ .topOfPipe = true });
-            const dst_stage = @bitCast(u32, vk.PipelineStageFlags{ .fragmentShader = true });
-            vk.vkCmdPipelineBarrier(command_buffer, src_stage, dst_stage, 0, 0, undefined, 0, undefined, 1, &barrier);
-        }
-
-        try app.device_dispatch.endCommandBuffer(command_buffer);
-
-        // try zvk.endCommandBuffer(command_buffer);
-
-        const submit_command_infos = [_]vk.SubmitInfo{.{
-            .s_type = vk.StructureType.SUBMIT_INFO,
-            .p_next = null,
-            .waitSemaphoreCount = 0,
-            .pWaitSemaphores = undefined,
-            .pWaitDstStageMask = undefined,
-            .commandBufferCount = 1,
-            .pCommandBuffers = @ptrCast([*]vk.CommandBuffer, &command_buffer),
-            .signalSemaphoreCount = 0,
-            .pSignalSemaphores = undefined,
-        }};
-
-        if (.success != vk.vkQueueSubmit(app.graphics_present_queue, 1, &submit_command_infos, null)) {
-            return error.QueueSubmitFailed;
-        }
-
-        if (vk.vkDeviceWaitIdle(app.logical_device) != .success) {
-            return error.DeviceWaitIdleFailed;
-        }
-
-        log.info("SwapTexture copy", .{});
-
-        // TODO
-        const second_image: []RGBA(f32) = undefined;
-        @memcpy(image_memory_map + texture_size_bytes, @ptrCast([*]u8, second_image.?), texture_size_bytes);
-    }
-
-    log.info("SwapTexture end", .{});
-
-    {
-        var command_buffer = try zvk.allocateCommandBuffer(app.logical_device, vk.CommandBufferAllocateInfo{
-            .s_type = vk.StructureType.COMMAND_BUFFER_ALLOCATE_INFO,
-            .p_next = null,
-            .level = .PRIMARY,
-            .commandPool = command_pool,
-            .commandBufferCount = 1,
-        });
-
-        try zvk.beginCommandBuffer(command_buffer, .{
-            .s_type = vk.StructureType.COMMAND_BUFFER_BEGIN_INFO,
-            .p_next = null,
-            .flags = .{ .oneTimeSubmit = true },
-            .pInheritanceInfo = null,
-        });
-
-        {
-            const barrier = [_]vk.ImageMemoryBarrier{
-                .{
-                    .s_type = vk.StructureType.IMAGE_MEMORY_BARRIER,
-                    .p_next = null,
-                    .srcAccessMask = .{},
-                    .dstAccessMask = .{ .shaderRead = true },
-                    .oldLayout = .GENERAL,
-                    .newLayout = .SHADER_READ_ONLY_OPTIMAL,
-                    .srcQueueFamilyIndex = vk.QUEUE_FAMILY_IGNORED,
-                    .dstQueueFamilyIndex = vk.QUEUE_FAMILY_IGNORED,
-                    .image = texture_image,
-                    .subresourceRange = .{
-                        .aspectMask = .{ .color = true },
-                        .baseMipLevel = 0,
-                        .levelCount = 1,
-                        .baseArrayLayer = 0,
-                        .layerCount = 2,
-                    },
-                },
-            };
-
-            const src_stage = @bitCast(u32, vk.PipelineStageFlags{ .topOfPipe = true });
-            const dst_stage = @bitCast(u32, vk.PipelineStageFlags{ .fragmentShader = true });
-            vk.vkCmdPipelineBarrier(command_buffer, src_stage, dst_stage, 0, 0, undefined, 0, undefined, 1, &barrier);
-        }
-
-        try app.device_dispatch.endCommandBuffer(command_buffer);
-
-        // try zvk.endCommandBuffer(command_buffer);
-
-        const submit_command_infos = [_]vk.SubmitInfo{.{
-            .s_type = vk.StructureType.SUBMIT_INFO,
-            .p_next = null,
-            .waitSemaphoreCount = 0,
-            .pWaitSemaphores = undefined,
-            .pWaitDstStageMask = undefined,
-            .commandBufferCount = 1,
-            .pCommandBuffers = @ptrCast([*]vk.CommandBuffer, &command_buffer),
-            .signalSemaphoreCount = 0,
-            .pSignalSemaphores = undefined,
-        }};
-
-        if (.success != vk.vkQueueSubmit(app.graphics_present_queue, 1, &submit_command_infos, null)) {
-            return error.QueueSubmitFailed;
-        }
-
-        if (vk.vkDeviceWaitIdle(app.logical_device) != .success) {
-            return error.DeviceWaitIdleFailed;
-        }
-    }
-}
-
-fn toUpper(string: *[]u8) void {
-    for (string.*) |*char| {
-        char.* = std.ascii.toUpper(char.*);
-    }
-}
-
-fn handleAudioPlay(allocator: Allocator, action_payload: action.PayloadAudioPlay) !void {
-    if (rewind_points.audio_started != RewindPoints.null_value) {
-        main_arena.rewindTo(rewind_points.audio_started);
-    } else {
-        rewind_points.audio_started = main_arena.used;
-    }
-
-    // TODO: If track is already set, update
-    current_audio_index = action_payload.id;
-    const audio_track_name = audio_files.items[action_payload.id];
-
-    // TODO: Don't hardcode, or put in a definition
-    var current_path_buffer: [128]u8 = undefined;
-    const current_path = try library_navigator.current_directory.realpath(".", current_path_buffer[0..]);
-
-    const paths: [2][]const u8 = .{ current_path, audio_track_name };
-    const full_path = std.fs.path.joinZ(allocator, paths[0..]) catch null;
-    defer allocator.free(full_path.?);
-
-    const kind = library_navigator.loaded_media_items.items[action_payload.id].fileType();
-
-    log.info("Playing track {s}", .{library_navigator.loaded_media_items.items[action_payload.id].root()});
-    log.info("Playing path {s}", .{full_path});
-
-    switch (kind) {
-        .mp3 => {
-            audio.mp3.playFile(allocator, full_path.?) catch |err| {
-                log.err("Failed to play music: {}", .{err});
-            };
-        },
-        .flac => {
-            audio.flac.playFile(allocator, full_path.?) catch |err| {
-                log.err("Failed to play music: {}", .{err});
-            };
-        },
-        else => {
-            unreachable;
-        },
-    }
-
-    //
-    // If the media icon is set to `resume` (I.e Triangle) we need to update it to `pause`
-    //
-
-    // So the issue is that you need to be able to trigger this action independently of mouse events
-    //
-    // bind(audio_playing, toggle_media_button);
-    // Well, it's a bit messy but you could use a single memory arena for this and just use
-    // { system_id, event_id } => { action_id, memory_offset }
-
-    // if (update_media_icon_action_id_opt) |update_media_icon_action_id| {
-    // handleUpdateVertices(allocator, &action.system_actions.items[update_media_icon_action_id].payload.update_vertices) catch |err| {
-    // log.err("Failed to update vertices for animation: {s}", .{err});
-    // };
-    // }
-
-    std.debug.assert(media_button_toggle_audio_action_id != update_media_icon_action_id_opt.?);
-
-    // Set the media icon button to update when clicked
-    if (update_media_icon_action_id_opt) |update_media_icon_action_id| {
-        std.log.info("Set action to update_vertices", .{});
-        action.system_actions.items[update_media_icon_action_id].action_type = .update_vertices;
-    }
-
-    log.info("Audio play", .{});
-    action.system_actions.items[media_button_toggle_audio_action_id].action_type = .audio_pause;
-
-    // This is for audio duration labels
-    vertex_buffer_count += (10);
-}
-
-// TODO: Rename act
 fn mouseButtonCallback(window: *glfw.Window, button: glfw.MouseButton, act: glfw.Action, mods: glfw.Mods) void {
-    _ = action;
     _ = mods;
-
     if (glfw.getCursorPos(window)) |cursor_position| {
         const half_width = @intToFloat(f32, screen_dimensions.width) / 2.0;
         const half_height = @intToFloat(f32, screen_dimensions.height) / 2.0;
@@ -1737,7 +1099,7 @@ fn mouseButtonCallback(window: *glfw.Window, button: glfw.MouseButton, act: glfw
 
         event_system.handleMouseEvents(position, is_pressed_left, is_pressed_right);
     } else |err| {
-        log.warn("Failed to get cursor position : {}", .{err});
+        std.log.warn("Failed to get cursor position : {}", .{err});
     }
 }
 
@@ -1762,25 +1124,16 @@ fn glfwKeyCallback(window: *glfw.Window, key: i32, scancode: i32, act: i32, mods
     _ = mods;
 }
 
-fn renderCurrentTrackDetails(face_writer: *QuadFaceWriter(GenericVertex)) !void {
-    _ = face_writer;
-    std.debug.assert(audio.output.getState() != .stopped);
-    // if (audio.output.getState() != .stopped) {
-    // const track_name = audio.current_track.title[0..audio.current_track.title_length];
-    // const artist_name = audio.current_track.artist[0..audio.current_track.artist_length];
+fn parseFileNameFromPath(path: []const u8) ![]const u8 {
+    var i = path.len - 1;
+    while (i > 0) : (i -= 1) {
+        if (path[i] == '/') {
+            return path[i + 1 ..];
+        }
+    }
 
-    // std.log.info("Adding track details: Title: '{s}' Artist '{s}'", .{ track_name, artist_name });
-
-    // {
-    // const placement = geometry.Coordinates2D(ScreenNormalizedBaseType){ .x = -0.95, .y = 0.93 };
-    // _ = try gui.generateText(GenericVertex, face_writer, track_name, placement, scale_factor, glyph_set, theme.track_title_text, null, texture_layer_dimensions);
-    // }
-
-    // {
-    // const placement = geometry.Coordinates2D(ScreenNormalizedBaseType){ .x = -0.95, .y = 0.88 };
-    // _ = try gui.generateText(GenericVertex, face_writer, artist_name, placement, scale_factor, glyph_set, theme.track_artist_text, null, texture_layer_dimensions);
-    // }
-    // }
+    std.log.err("Failed to parse file name from path '{s}'", .{path});
+    return error.PathFormatError;
 }
 
 fn update(allocator: Allocator, app: *GraphicsContext) !void {
@@ -1789,80 +1142,55 @@ fn update(allocator: Allocator, app: *GraphicsContext) !void {
     _ = app;
     _ = allocator;
 
-    log.info("Update called", .{});
-
-    assert(screen_dimensions.width > 0);
-    assert(screen_dimensions.height > 0);
+    std.debug.assert(screen_dimensions.width > 0);
+    std.debug.assert(screen_dimensions.height > 0);
 
     vertex_buffer_count = 0;
 
     ui.reset();
-    navigation.reset();
+    audio.reset();
+    event_system.resetBindings();
 
     var face_writer = quad_face_writer_pool.create(0, vertices_range_size / @sizeOf(GenericVertex));
 
     try ui.header.draw(&face_writer, glyph_set, scale_factor, theme);
     try ui.footer.draw(&face_writer, theme);
-    try ui.progress_bar.background.draw(&face_writer, scale_factor, theme);
-    try ui.playlist_buttons.next.draw(&face_writer, scale_factor, theme);
-    try ui.playlist_buttons.previous.draw(&face_writer, scale_factor, theme);
-
-    media_button_face_index = face_writer.used;
+    try ui.directory_up_button.draw(&face_writer, glyph_set, scale_factor, theme);
 
     {
-        const play_button = try ui.playlist_buttons.toggle.draw(&face_writer, scale_factor, theme);
-        _ = play_button;
+        // Progress bar will only ever required 2 quads
+        // As a result it is better to allocate outside of the function
+        var progress_bar_quads = try face_writer.allocate(2);
+        ui.progress_bar.create(progress_bar_quads, scale_factor, theme);
 
-        // const on_click_1 = event_system.registerMouseLeftPressAction(play_button.extent);
-        // const on_click_2 = event_system.registerMouseLeftPressAction(play_button.extent);
-
-        // _ = on_click_1;
-        // _ = on_click_2;
-
-        // const audio_pause_action = action.Action{
-        // .action_type = .none,
-        // .payload = .{ .audio_pause = .{} },
+        // const origin_event = event_system.SubsystemEventIndex{
+        //     .subsystem = audio.subsystem_index,
+        //     .index = @intCast(event_system.EventIndex, @enumToInt(audio.AudioEvent.started)),
         // };
-        // const do_audio_pause = action.system_actions.append(audio_pause_action);
-        // _ = do_audio_pause;
 
-        // _ = play_button;
-        // const on_play_button_hovered = event_system.registerMouseLeftPressAction(play_button.extent);
-        // const do_toggle_play_button = play_button.doToggle();
-        // const do_pause_audio = audio.actions.pause();
+        // // Add an action handler that will start the progress bar callback
+        // // when audio starts playing
+        // const target_event = event_system.SubsystemActionIndex{
+        //     .subsystem = ui.subsystem_index,
+        //     .index = ui.doStartProgressBar(),
+        // };
 
-        // event_system.connect(on_play_button_hovered, do_toggle_play_button);
-        // event_system.connect(on_play_button_hovered, do_pause_audio);
+        // _ = event_system.internalEventsBind(.{ .origin = origin_event, .target = target_event });
     }
 
-    // media_button_toggle_audio_action_id = (update_media_icon_action_id_opt.? + 1);
+    try ui.playlist_buttons.next.draw(&face_writer, scale_factor, theme);
+    try ui.playlist_buttons.previous.draw(&face_writer, scale_factor, theme);
+    try ui.playlist_buttons.toggle.draw(&face_writer, scale_factor, theme);
 
-    // {
-    // const track_length_seconds: u32 = audio.output.trackLengthSeconds() catch 1;
-    // const track_played_seconds: u32 = audio.output.secondsPlayed() catch 0;
-    // const progress_percentage: f32 = @intToFloat(f32, track_played_seconds) / @intToFloat(f32, track_length_seconds);
-
-    // audio_progress_bar_faces_quad_index = try ui.progress_bar.foreground.draw(&face_writer, progress_percentage, scale_factor, theme);
-    // }
-
-    // if (audio.output.getState() != .stopped) {
-    // try renderCurrentTrackDetails(&face_writer, scale_factor);
-    // }
-
-    // try ui.directory_up_button.draw(&face_writer, glyph_set, scale_factor, theme);
-
-    // const is_tracks = library_navigator.containsAudio();
-    // std.log.info("Contains audio: {s}", .{is_tracks});
-
-    if (navigation.contents.count > 1 and screen_dimensions.width >= 300) {
+    if (navigation.directoryview_storage.count > 1 and screen_dimensions.width >= 300) {
         var slice_buffer: [64][]const u8 = undefined;
-        const directory_count = navigation.contents.directoryCount();
+        const directory_count = navigation.directoryview_storage.directoryCount();
         var i: u8 = 0;
         while (i < directory_count) : (i += 1) {
-            slice_buffer[i] = navigation.contents.filename(i);
+            slice_buffer[i] = navigation.directoryview_storage.filename(i);
         }
 
-        const width_percentage: f32 = if (navigation.playlist_path_opt != null) 0.6 else 0.9;
+        const width_percentage: f32 = if (navigation.trackview_path_opt != null) 0.6 else 0.9;
         const placement = scale_factor.convertPoint(.pixel, .ndc_right, .{
             .x = 20,
             .y = 200,
@@ -1871,7 +1199,7 @@ fn update(allocator: Allocator, app: *GraphicsContext) !void {
         const directory_screen_space = geometry.Extent2D(ScreenNormalizedBaseType){
             .width = width_percentage * 2.0,
             .height = 1.6,
-            .x = if (navigation.playlist_path_opt == null) placement.x else -1.0,
+            .x = if (navigation.trackview_path_opt == null) placement.x else -1.0,
             .y = -0.7,
         };
 
@@ -1884,332 +1212,57 @@ fn update(allocator: Allocator, app: *GraphicsContext) !void {
             directory_screen_space,
             .top_left,
         );
-
-        if (navigation.playlist_path_opt) |playlist_path| {
-            // TODO: 'unable to evulate constant expression error'. Possible compiler bug
-            // {
-            // const track_meta_checkpoint = main_arena.checkpoint();
-            // const track_view_model = try TrackViewModel.create(&main_arena, playlist_path, 0, 20);
-            // track_view_model.log();
-            // main_arena.rewindTo(track_meta_checkpoint);
-            // }
-
-            const track_metadata_list = try audio.mp3.loadMetaFromDirectory(&main_arena, playlist_path);
-            var track_slice_list: [64][]const u8 = undefined;
-            for (track_metadata_list) |track_metadata, index| {
-                const length: u8 = main_arena.memory[track_metadata.title + 1];
-                track_slice_list[index] = main_arena.memory[track_metadata.title + 2 .. track_metadata.title + 2 + length];
-            }
-            try ui.track_view.draw(
-                &face_writer,
-                track_slice_list[0..track_metadata_list.len],
-                glyph_set,
-                scale_factor,
-                theme,
-            );
-        }
     }
 
-    //
-    // Duration of audio played
-    //
+    if (navigation.trackview_path_opt) |trackview_path| {
+        const draw_region = geometry.Extent2D(ScreenPixelBaseType){
+            .x = screen_dimensions.width - 400,
+            .y = scale_factor.convertPoint(.ndc_right, .pixel, .{
+                .y = -0.8,
+                .x = 0.0,
+            }).y,
+            .width = 400,
+            .height = scale_factor.convertLength(.ndc_right, .pixel, .vertical, 1.6),
+        };
 
-    // {
-    // //
-    // // Track Duration Label
-    // //
+        if (navigation.trackview_storage_opt == null) {
+            std.debug.assert(false);
+            navigation.trackview_storage_opt = try Playlist.Storage.create(&trackview_arena, trackview_path, 0, 20);
+        }
 
-    // if (audio.output.getState() != .stopped) {
-    // try generateDurationLabels(&face_writer, scale_factor);
-    // }
-    // }
+        var trackview_path_buffer: [256]u8 = undefined;
+        const trackview_path_string = try trackview_path.dir.realpath(".", trackview_path_buffer[0..]);
 
-    // audio_progress_label_faces_quad_index = face_writer.used;
+        const trackview_directory_name = parseFileNameFromPath(trackview_path_string) catch "Unknown";
+        try ui.track_view.draw(
+            &face_writer,
+            navigation.trackview_storage_opt.?,
+            glyph_set,
+            scale_factor,
+            theme,
+            trackview_directory_name,
+            draw_region,
+        );
+    }
+
     vertex_buffer_count = face_writer.used;
 
     is_draw_required = false;
     is_render_requested = true;
 
-    log.info("Update completed", .{});
-
-    event_system.mouse_event_writer.print();
-}
-
-// fn generateDurationLabels(face_writer: *QuadFaceWriter(GenericVertex), scale_factor: geometry.ScaleFactor2D(f32)) !void {
-// const quads_required_count: u32 = 10;
-// assert(face_writer.remaining() >= quads_required_count);
-
-// //
-// // Track Duration Label
-// //
-
-// const progress_bar_width: f32 = 1.0;
-// const progress_bar_margin: f32 = (2.0 - progress_bar_width) / 2.0;
-// const progress_bar_extent = geometry.Extent2D(ScreenNormalizedBaseType){
-// .x = -1.0 + progress_bar_margin,
-// .y = 0.865,
-// .width = progress_bar_width,
-// .height = 8 * scale_factor.vertical,
-// };
-
-// const track_duration_total = secondsToAudioDurationTime(@intCast(u16, try audio.output.trackLengthSeconds()));
-// const track_duration_played = secondsToAudioDurationTime(@intCast(u16, try audio.output.secondsPlayed()));
-// const text_color = RGBA(f32){ .r = 0.8, .g = 0.8, .b = 0.8, .a = 1.0 };
-// const margin_from_progress_bar: f32 = 0.03;
-// var buffer: [5]u8 = undefined;
-
-// //
-// // Duration Total
-// //
-
-// // audio_progress_label_faces_quad_index = face_writer.used;
-
-// const duration_total_label = try std.fmt.bufPrint(&buffer, "{d:0>2}:{d:0>2}", .{ track_duration_total.minutes, track_duration_total.seconds });
-// const duration_total_label_placement = geometry.Coordinates2D(ScreenNormalizedBaseType){
-// .x = progress_bar_extent.x + progress_bar_extent.width + margin_from_progress_bar,
-// .y = progress_bar_extent.y + (progress_bar_extent.height / 2.0),
-// };
-
-// const duration_total_label_faces = try gui.generateText(
-// GenericVertex,
-// face_writer,
-// duration_total_label,
-// duration_total_label_placement,
-// scale_factor,
-// glyph_set,
-// text_color,
-// null,
-// );
-
-// assert(duration_total_label_faces.len == 5);
-
-// //
-// // Duration Played
-// //
-
-// const duration_played_label = try std.fmt.bufPrint(
-// &buffer,
-// "{d:0>2}:{d:0>2}",
-// .{ track_duration_played.minutes, track_duration_played.seconds },
-// );
-// const duration_played_label_placement = geometry.Coordinates2D(ScreenNormalizedBaseType){
-// .x = progress_bar_extent.x - margin_from_progress_bar - 0.09,
-// .y = progress_bar_extent.y + (progress_bar_extent.height / 2.0),
-// };
-
-// const duration_played_label_faces = try gui.generateText(
-// GenericVertex,
-// face_writer,
-// duration_played_label,
-// duration_played_label_placement,
-// scale_factor,
-// glyph_set,
-// text_color,
-// null,
-// );
-
-// is_render_requested = true;
-// assert(duration_played_label_faces.len == 5);
-// }
-
-fn generateAudioProgressBar(
-    face_writer: *QuadFaceWriter(GenericVertex),
-    progress: f32,
-    color: RGBA(f32),
-    extent: geometry.Extent2D(ScreenNormalizedBaseType),
-) ![]QuadFace(GenericVertex) {
-    assert(progress >= 0.0 and progress <= 1.0);
-    const progress_extent = geometry.Extent2D(ScreenNormalizedBaseType){
-        .x = extent.x,
-        .y = extent.y,
-        .width = extent.width * progress,
-        .height = extent.height,
-    };
-
-    var faces = try face_writer.allocate(1);
-    faces[0] = graphics.generateQuadColored(GenericVertex, progress_extent, color);
-    return faces;
-}
-
-fn secondsToAudioDurationTime(seconds: u16) AudioDurationTime {
-    var current_seconds: u16 = seconds;
-    const current_minutes = blk: {
-        var minutes: u16 = 0;
-        while (current_seconds >= 60) {
-            minutes += 1;
-            current_seconds -= 60;
-        }
-        break :blk minutes;
-    };
-
-    return .{
-        .seconds = current_seconds,
-        .minutes = current_minutes,
-    };
-}
-
-// fn updateAudioDurationLabel(current_point_seconds: u32, track_duration_seconds: u32, vertices: []GenericVertex) !void {
-// // Wrap our fixed-size buffer in allocator interface to be generic
-
-// var face_writer = quad_face_writer_pool.create(vertices,
-
-// var fixed_buffer_allocator = FixedBufferAllocator.init(@ptrCast([*]u8, vertices), vertices_range_size);
-// var face_allocator = fixed_buffer_allocator.allocator();
-
-// assert(current_point_seconds <= (1 << 16));
-
-// const track_duration_total = secondsToAudioDurationTime(@intCast(u16, track_duration_seconds));
-// const track_duration_played = secondsToAudioDurationTime(@intCast(u16, current_point_seconds));
-
-// const scale_factor = geometry.ScaleFactor2D(f32){
-// .horizontal = (2.0 / @intToFloat(f32, screen_dimensions.width)),
-// .vertical = (2.0 / @intToFloat(f32, screen_dimensions.height)),
-// };
-
-// var buffer: [13]u8 = undefined;
-// const audio_progress_label_text = try std.fmt.bufPrint(&buffer, "{d:0>2}:{d:0>2} / {d:0>2}:{d:0>2}", .{ track_duration_played.minutes, track_duration_played.seconds, track_duration_total.minutes, track_duration_total.seconds });
-// const audio_progress_label_placement = geometry.Coordinates2D(ScreenNormalizedBaseType){ .x = -0.9, .y = 0.9 };
-// const audio_progress_text_color = RGBA(f32){ .r = 0.8, .g = 0.8, .b = 0.8, .a = 1.0 };
-
-// _ = try gui.generateText(GenericVertex, face_allocator, audio_progress_label_text, audio_progress_label_placement, scale_factor, glyph_set, audio_progress_text_color, null, texture_layer_dimensions);
-
-// is_render_requested = true;
-// }
-
-fn toSlice(null_terminated_string: [*:0]const u8) []const u8 {
-    var count: u32 = 0;
-    const max: u32 = 1024;
-    while (count < max) : (count += 1) {
-        if (null_terminated_string[count] == 0) {
-            return null_terminated_string[0..count];
-        }
-    }
-    std.log.err("Failed to find null terminator in string after {d} charactors", .{max});
-    unreachable;
-}
-
-fn handleAudioFinished() void {
-    const allocator = std.heap.c_allocator;
-
-    current_audio_index += 1;
-    if (current_audio_index >= audio_files.count) {
-        return;
-    }
-
-    const audio_track_name = audio_files.items[current_audio_index];
-
-    // TODO: Don't hardcode, or put in a definition
-    var current_path_buffer: [128]u8 = undefined;
-    const current_path = library_navigator.current_directory.realpath(".", current_path_buffer[0..]) catch |err| {
-        std.log.err("Failed to create std.fs.Dir of current path : {}", .{err});
-        return;
-    };
-
-    const paths: [2][]const u8 = .{ current_path, audio_track_name };
-    const full_path = std.fs.path.joinZ(allocator, paths[0..]) catch null;
-    defer allocator.free(full_path.?);
-
-    const kind = library_navigator.loaded_media_items.items[current_audio_index].fileType();
-
-    log.info("Playing track {s}", .{library_navigator.loaded_media_items.items[current_audio_index].root()});
-    log.info("Playing path {s}", .{full_path});
-
-    switch (kind) {
-        .mp3 => {
-            audio.mp3.playFile(allocator, full_path.?) catch |err| {
-                log.err("Failed to play music: {}", .{err});
-            };
-        },
-        .flac => {
-            audio.flac.playFile(allocator, full_path.?) catch |err| {
-                log.err("Failed to play music: {}", .{err});
-            };
-        },
-        else => {
-            std.log.err("Invalid kind '{}' for track #{d} '{s}'", .{ kind, current_audio_index, library_navigator.loaded_media_items.items[current_audio_index].fileName() });
-            unreachable;
-        },
-    }
-
-    // TODO:
-    // const title_length = track_metadatas.items[current_audio_index - 1].title_length;
-    // const artist_length = track_metadatas.items[current_audio_index - 1].artist_length;
-
-    // vertex_buffer_count -= (10 + title_length + artist_length);
-}
-
-// fn handleAudioStopped() void {
-// log.info("Audio stopped event triggered", .{});
-// const progress_percentage: f32 = 0.0;
-// var face_writer = quad_face_writer_pool.create(audio_progress_bar_faces_quad_index, 1);
-// const scale_factor = geometry.ScaleFactor2D(f32){
-// .horizontal = (2.0 / @intToFloat(f32, screen_dimensions.width)),
-// .vertical = (2.0 / @intToFloat(f32, screen_dimensions.height)),
-// };
-
-// const width: f32 = 1.0;
-// const margin: f32 = (2.0 - width) / 2.0;
-
-// const inner_margin_horizontal: f32 = 0.005;
-// const inner_margin_vertical: f32 = 1 * scale_factor.vertical;
-
-// const extent = geometry.Extent2D(ScreenNormalizedBaseType){
-// .x = -1.0 + margin + inner_margin_horizontal,
-// .y = 0.87 - inner_margin_vertical,
-// .width = (width - (inner_margin_horizontal * 2.0)),
-// .height = 6 * scale_factor.vertical,
-// };
-
-// const color = RGBA(f32).fromInt(u8, 150, 50, 80, 255);
-// _ = generateAudioProgressBar(&face_writer, progress_percentage, color, extent) catch |err| {
-// log.warn("Failed to draw audio progress bar : {s}", .{err});
-// return;
-// };
-
-// vertex_buffer_count -= (5 * 2);
-// is_render_requested = true;
-// }
-
-fn handleAudioStarted() void {
-    // const max_title_length: u8 = 16;
-    // const max_artist_length: u8 = 16;
-    // const charactor_count: u16 = 10;
-    // const maximum_quad_count: u16 = charactor_count + max_artist_length + max_title_length;
-
-    // var face_writer = quad_face_writer_pool.create(@intCast(u16, vertex_buffer_count), maximum_quad_count);
-    // std.debug.assert(face_writer.used == 0);
-    // const scale_factor = geometry.ScaleFactor2D(f32){
-    // .horizontal = (2.0 / @intToFloat(f32, screen_dimensions.width)),
-    // .vertical = (2.0 / @intToFloat(f32, screen_dimensions.height)),
-    // };
-
-    // generateDurationLabels(&face_writer, scale_factor) catch |err| {
-    // log.warn("Failed to draw audio duration label : {s}", .{err});
-    // return;
-    // };
-
-    // log.info("Rendering track details", .{});
-    // renderCurrentTrackDetails(&face_writer, scale_factor) catch |err| {
-    // log.warn("Failed to render current track details : {s}", .{err});
-    // return;
-    // };
-
-    // vertex_buffer_count += face_writer.used;
-    // is_render_requested = true;
+    std.log.info("Update completed", .{});
 }
 
 fn appLoop(allocator: Allocator, app: *GraphicsContext) !void {
-    const target_fps = 30;
+    const target_fps = 40;
     const target_ms_per_frame: u32 = 1000 / target_fps;
 
-    log.info("Target MS / frame: {d}", .{target_ms_per_frame});
-
-    // Timestamp in milliseconds since last update of audio duration label
-    var audio_duration_last_update_ts: i64 = std.time.milliTimestamp();
-    const audio_duration_update_interval_ms: u64 = 1000;
+    std.log.info("Target MS / frame: {d}", .{target_ms_per_frame});
 
     glfw.setCursorPosCallback(app.window, mousePositionCallback);
     glfw.setMouseButtonCallback(app.window, mouseButtonCallback);
+
+    scale_factor = ScreenScaleFactor.create(screen_dimensions);
 
     while (!glfw.shouldClose(app.window)) {
         glfw.pollEvents();
@@ -2225,32 +1278,26 @@ fn appLoop(allocator: Allocator, app: *GraphicsContext) !void {
             screen.height != screen_dimensions.height)
         {
             framebuffer_resized = true;
+            std.log.info("Framebuffer resized", .{});
             screen_dimensions.width = screen.width;
             screen_dimensions.height = screen.height;
+
+            scale_factor = ScreenScaleFactor.create(screen_dimensions);
         }
 
-        scale_factor = ScreenScaleFactor.create(screen_dimensions);
+        for (audio.output_event_buffer.collect()) |event| {
+            if (event == .finished) {
+                std.log.info("Track finished. Starting next..", .{});
+                // event_system.resetActiveTimeIntervalEvents();
+                Playlist.trackNext() catch |err| {
+                    std.log.warn("Error playing next track in playlist -> {}", .{err});
+                };
+            }
 
-        // scale_factor = geometry.ScaleFactor2D(f32){
-        // .horizontal = (2.0 / @intToFloat(f32, screen_dimensions.width)),
-        // .vertical = (2.0 / @intToFloat(f32, screen_dimensions.height)),
-        // };
-
-        // if (!audio.output_event_buffer.empty()) {
-        // for (audio.output_event_buffer.collect()) |event| {
-        // switch (event) {
-        // .stopped => handleAudioStopped(),
-        // .finished => handleAudioFinished(),
-        // .started => handleAudioStarted(),
-        // .duration_calculated => {
-        // // log.info("Track duration seconds: {d}", .{audio.mp3.track_length});
-        // },
-        // else => {
-        // log.warn("Unhandled default audio event -> {s}", .{event});
-        // },
-        // }
-        // }
-        // }
+            if (event == .started or event == .paused or event == .stopped or event == .resumed) {
+                is_draw_required = true;
+            }
+        }
 
         for (gui.message_queue.collect()) |message| {
             if (message == .vertices_modified) {
@@ -2259,19 +1306,68 @@ fn appLoop(allocator: Allocator, app: *GraphicsContext) !void {
             }
         }
 
+        // TODO: Remove
+        for (Playlist.output_events.collect()) |event| {
+            if (event == .new_track_started) {
+                is_draw_required = true;
+            }
+
+            if (event == .playlist_initialized) {
+                const origin_event = event_system.SubsystemEventIndex{
+                    .subsystem = audio.subsystem_index,
+                    .index = @intCast(event_system.EventIndex, @enumToInt(audio.AudioEvent.finished)),
+                };
+
+                const target_event = event_system.SubsystemActionIndex{
+                    .subsystem = Playlist.subsystem_index,
+                    .index = Playlist.doNextTrackPlay(),
+                };
+
+                _ = event_system.internalEventsBind(.{ .origin = origin_event, .target = target_event });
+
+                // TODO: Should not require a redraw
+                // For the current track indicator
+                is_draw_required = true;
+            }
+        }
+
         for (navigation.message_queue.collect()) |message| {
-            // TODO: Switch
-            if (message == .playlist_opened) {
-                is_draw_required = true;
-                break;
+            switch (message) {
+                .trackview_opened => {
+                    // TODO: Very ugly code
+                    if (navigation.trackview_path_opt) |trackview_path| {
+                        if (Playlist.storage_opt) |playlist_storage| {
+                            // Reuse *Storage from Playlist if it matches
+                            const playlist_path = AbsolutePath.interface.value(playlist_storage.parent_path);
+                            const playlist_path_trimmed = playlist_path[0 .. playlist_path.len - 1];
+                            var output_buffer: [256]u8 = undefined;
+                            const trackview_path_string = try trackview_path.dir.realpath(".", output_buffer[0..]);
+                            if (std.mem.eql(u8, playlist_path_trimmed, trackview_path_string)) {
+                                navigation.trackview_storage_opt = playlist_storage;
+                                continue;
+                            }
+                        }
+                        navigation.trackview_storage_opt = try Playlist.Storage.create(&trackview_arena, trackview_path, 0, 20);
+                        _ = try std.Thread.spawn(.{}, navigation.calculateDurationsWrapper, .{navigation.trackview_storage_opt.?});
+                        is_draw_required = true;
+                    }
+                },
+                .directory_changed => {
+                    // const checkpoint_index = @enumToInt(RewindLevel.directory_changed);
+                    // main_arena.rewindTo(@intCast(u16, arena_checkpoints[checkpoint_index]));
+                    try navigation.init(&main_arena, navigation.directoryview_path);
+                    is_draw_required = true;
+                },
+                .duration_calculated => {
+                    is_draw_required = true;
+                },
             }
-            if (message == .directory_changed) {
-                const checkpoint_index = @enumToInt(RewindLevel.directory_changed);
-                main_arena.rewindTo(@intCast(u16, arena_checkpoints[checkpoint_index]));
-                try navigation.init(&main_arena, navigation.current_path);
-                is_draw_required = true;
-                break;
-            }
+        }
+
+        // TODO: Don't do this every frame
+        if (audio.output.getState() == .playing) {
+            ui.progress_bar.update();
+            is_render_requested = true;
         }
 
         if (framebuffer_resized) {
@@ -2279,6 +1375,8 @@ fn appLoop(allocator: Allocator, app: *GraphicsContext) !void {
             framebuffer_resized = false;
             try recreateSwapchain(allocator, app);
         }
+
+        const frame_start_ms: i64 = std.time.milliTimestamp();
 
         if (is_draw_required) {
             try update(allocator, app);
@@ -2294,69 +1392,20 @@ fn appLoop(allocator: Allocator, app: *GraphicsContext) !void {
             is_render_requested = false;
         }
 
-        const frame_start_ms: i64 = std.time.milliTimestamp();
-
         const frame_end_ms: i64 = std.time.milliTimestamp();
         const frame_duration_ms = frame_end_ms - frame_start_ms;
 
+        event_system.handleTimeEvents(frame_end_ms);
+
         // TODO: I think the loop is running less than 1ms so you should update
         //       to nanosecond precision
-        assert(frame_duration_ms >= 0);
+        std.debug.assert(frame_duration_ms >= 0);
 
         if (frame_duration_ms >= target_ms_per_frame) {
             continue;
         }
 
-        // Replace this with audio events to save loading each frame
-        const is_playing = audio.output.getState() == .playing;
-
-        // Each second update the audio duration
-        if (is_playing and frame_start_ms >= (audio_duration_last_update_ts + audio_duration_update_interval_ms)) {
-            // const track_length_seconds: u32 = audio.output.trackLengthSeconds() catch 0;
-            // const track_played_seconds: u32 = audio.output.secondsPlayed() catch 0;
-
-            // {
-            // const vertices_begin_index: usize = audio_progress_label_faces_quad_index * 4;
-            // try updateAudioDurationLabel(track_played_seconds, track_length_seconds, vertices[vertices_begin_index .. vertices_begin_index + (11 * 4)]);
-            // audio_duration_last_update_ts = frame_start_ms;
-            // }
-
-            //
-            // Update progress bar too
-            //
-
-            // {
-            // const progress_percentage: f32 = @intToFloat(f32, track_played_seconds) / @intToFloat(f32, track_length_seconds);
-            // if (progress_percentage > 0.0 and progress_percentage <= 1.0) {
-            // const width: f32 = 1.0;
-            // const margin: f32 = (2.0 - width) / 2.0;
-
-            // const inner_margin_horizontal = 4 * scale_factor.horizontal;
-            // const inner_margin_vertical = 1 * scale_factor.vertical;
-
-            // const extent = geometry.Extent2D(ScreenNormalizedBaseType){
-            // .x = -1.0 + margin + inner_margin_horizontal,
-            // .y = 0.87 - inner_margin_vertical,
-            // .width = (width - (inner_margin_horizontal * 2.0)),
-            // .height = 6 * scale_factor.vertical,
-            // };
-
-            // const color = RGBA(f32).fromInt(u8, 150, 50, 80, 255);
-            // var face_writer = quad_face_writer_pool.create(audio_progress_bar_faces_quad_index, 1);
-
-            // _ = try generateAudioProgressBar(&face_writer, progress_percentage, color, extent);
-            // }
-
-            // {
-            // std.debug.assert(audio_progress_label_faces_quad_index != 0);
-            // var face_writer = quad_face_writer_pool.create(audio_progress_label_faces_quad_index, 10);
-            // try generateDurationLabels(&face_writer, scale_factor);
-            // }
-            // is_render_requested = true;
-            // }
-        }
-
-        assert(target_ms_per_frame > frame_duration_ms);
+        std.debug.assert(target_ms_per_frame > frame_duration_ms);
         const remaining_ms: u32 = target_ms_per_frame - @intCast(u32, frame_duration_ms);
         std.time.sleep(remaining_ms * 1000 * 1000);
     }
@@ -2368,10 +1417,10 @@ fn recordRenderPass(
     app: GraphicsContext,
     indices_count: u32,
 ) !void {
-    assert(app.command_buffers.len > 0);
-    assert(app.swapchain_images.len == app.command_buffers.len);
-    assert(app.screen_dimensions.width == app.swapchain_extent.width);
-    assert(app.screen_dimensions.height == app.swapchain_extent.height);
+    std.debug.assert(app.command_buffers.len > 0);
+    std.debug.assert(app.swapchain_images.len == app.command_buffers.len);
+    std.debug.assert(app.screen_dimensions.width == app.swapchain_extent.width);
+    std.debug.assert(app.screen_dimensions.height == app.swapchain_extent.height);
 
     const clear_color = theme.navigation_background;
     const clear_colors = [1]vk.ClearValue{
@@ -2427,7 +1476,7 @@ fn renderFrame(allocator: Allocator, app: *GraphicsContext) !void {
     var result = acquire_image_result.result;
 
     if (result == .error_out_of_date_khr) {
-        log.info("Swapchain out of date; Recreating..", .{});
+        std.log.info("Swapchain out of date; Recreating..", .{});
         try recreateSwapchain(allocator, app);
         return;
     } else if (result != .success and result != .suboptimal_khr) {
@@ -2478,96 +1527,10 @@ fn renderFrame(allocator: Allocator, app: *GraphicsContext) !void {
     current_frame = (current_frame + 1) % max_frames_in_flight;
 }
 
-const BaseDispatch = vk.BaseWrapper(.{
-    .createInstance = true,
-});
-
-const InstanceDispatch = vk.InstanceWrapper(.{
-    .destroyInstance = true,
-    .createDevice = true,
-    .destroySurfaceKHR = true,
-    .enumeratePhysicalDevices = true,
-    .getPhysicalDeviceProperties = true,
-    .enumerateDeviceExtensionProperties = true,
-    .getPhysicalDeviceSurfaceFormatsKHR = true,
-    .getPhysicalDeviceSurfacePresentModesKHR = true,
-    .getPhysicalDeviceSurfaceCapabilitiesKHR = true,
-    .getPhysicalDeviceQueueFamilyProperties = true,
-    .getPhysicalDeviceSurfaceSupportKHR = true,
-    .getPhysicalDeviceMemoryProperties = true,
-    .getDeviceProcAddr = true,
-});
-
-const DeviceDispatch = vk.DeviceWrapper(.{
-    .destroyDevice = true,
-    .getDeviceQueue = true,
-    .createSemaphore = true,
-    .createFence = true,
-    .createImageView = true,
-    .destroyImageView = true,
-    .destroySemaphore = true,
-    .destroyFence = true,
-    .getSwapchainImagesKHR = true,
-    .createSwapchainKHR = true,
-    .destroySwapchainKHR = true,
-    .acquireNextImageKHR = true,
-    .deviceWaitIdle = true,
-    .waitForFences = true,
-    .resetFences = true,
-    .queueSubmit = true,
-    .queuePresentKHR = true,
-    .createCommandPool = true,
-    .destroyCommandPool = true,
-    .allocateCommandBuffers = true,
-    .freeCommandBuffers = true,
-    .queueWaitIdle = true,
-    .createShaderModule = true,
-    .destroyShaderModule = true,
-    .createPipelineLayout = true,
-    .destroyPipelineLayout = true,
-    .createRenderPass = true,
-    .destroyRenderPass = true,
-    .createGraphicsPipelines = true,
-    .destroyPipeline = true,
-    .createFramebuffer = true,
-    .destroyFramebuffer = true,
-    .beginCommandBuffer = true,
-    .endCommandBuffer = true,
-    .allocateMemory = true,
-    .freeMemory = true,
-    .createBuffer = true,
-    .destroyBuffer = true,
-    .getBufferMemoryRequirements = true,
-    .mapMemory = true,
-    .unmapMemory = true,
-    .bindBufferMemory = true,
-    .cmdBeginRenderPass = true,
-    .cmdEndRenderPass = true,
-    .cmdBindPipeline = true,
-    .cmdDraw = true,
-    .cmdSetViewport = true,
-    .cmdSetScissor = true,
-    .cmdBindVertexBuffers = true,
-    .cmdCopyBuffer = true,
-    .cmdDrawIndexed = true,
-    .createImage = true,
-    .getImageMemoryRequirements = true,
-    .bindImageMemory = true,
-    .cmdPipelineBarrier = true,
-    .createDescriptorSetLayout = true,
-    .createDescriptorPool = true,
-    .allocateDescriptorSets = true,
-    .createSampler = true,
-    .updateDescriptorSets = true,
-    .resetCommandPool = true,
-    .cmdBindIndexBuffer = true,
-    .cmdBindDescriptorSets = true,
-});
-
 const GraphicsContext = struct {
-    base_dispatch: BaseDispatch,
-    instance_dispatch: InstanceDispatch,
-    device_dispatch: DeviceDispatch,
+    base_dispatch: vulkan_config.BaseDispatch,
+    instance_dispatch: vulkan_config.InstanceDispatch,
+    device_dispatch: vulkan_config.DeviceDispatch,
 
     window: *glfw.Window,
     vertex_shader_module: vk.ShaderModule,
@@ -3023,7 +1986,7 @@ fn createGraphicsPipeline(app: GraphicsContext, pipeline_layout: vk.PipelineLayo
 }
 
 fn createFramebuffers(allocator: Allocator, app: GraphicsContext) ![]vk.Framebuffer {
-    assert(app.swapchain_image_views.len > 0);
+    std.debug.assert(app.swapchain_image_views.len > 0);
     var framebuffer_create_info = vk.FramebufferCreateInfo{
         .s_type = vk.StructureType.framebuffer_create_info,
         .render_pass = app.render_pass,
@@ -3049,7 +2012,7 @@ fn createFramebuffers(allocator: Allocator, app: GraphicsContext) ![]vk.Framebuf
 }
 
 fn allocateCommandBuffers(allocator: Allocator, app: GraphicsContext, count: u32) ![]vk.CommandBuffer {
-    assert(count > 0);
+    std.debug.assert(count > 0);
     const command_buffer_allocate_info = vk.CommandBufferAllocateInfo{
         .s_type = vk.StructureType.command_buffer_allocate_info,
         .command_pool = app.command_pool,
@@ -3064,7 +2027,7 @@ fn allocateCommandBuffers(allocator: Allocator, app: GraphicsContext, count: u32
 }
 
 fn cleanupSwapchain(allocator: Allocator, app: *GraphicsContext) void {
-    log.info("Cleaning swapchain", .{});
+    std.log.info("Cleaning swapchain", .{});
 
     app.device_dispatch.freeCommandBuffers(
         app.logical_device,

@@ -7,6 +7,9 @@ const std = @import("std");
 const memory = @import("memory");
 const event_system = @import("event_system");
 const FixedAtomicEventQueue = @import("message_queue").FixedAtomicEventQueue;
+const Playlist = @import("Playlist");
+const Storage = Playlist.Storage;
+const audio = @import("audio");
 
 const DirectoryContents = struct {
     arena_index: u16 = 0,
@@ -37,18 +40,21 @@ const DirectoryContents = struct {
 
     /// Returns the path of the parent directory
     pub fn parent(self: @This()) []const u8 {
-        const base = @ptrCast([*]const u8, @ptrToInt(self) + @sizeOf(@This()));
-        const length = base;
+        const base = @intToPtr([*]const u8, @ptrToInt(&self) + @sizeOf(@This()));
+        const length: usize = @intCast(usize, base[0]);
         return base[1 .. 1 + length];
     }
 
     /// Returns the name of the file at the index given
     pub fn filename(self: @This(), index: u8) []const u8 {
+        std.debug.assert(index < self.count);
         const base = @intToPtr([*]const u8, @ptrToInt(&self) + @sizeOf(@This()));
+
         var i: u16 = 0;
         var offset: u16 = 0;
         var length: u8 = 0;
-        while (i < (index + 1)) : (i += 1) {
+        while (i <= index) : (i += 1) {
+            std.debug.assert(i < self.size);
             length = base[offset];
             offset += (length + 2);
         }
@@ -96,9 +102,10 @@ const DirectoryContents = struct {
 
     pub fn contentsPrint(self: @This()) void {
         const print = std.debug.print;
-        var i: u8 = 0;
-        print("DIRECTORY CONTENTS: {d}\n", .{self.count});
-        while (i < (self.count - 1)) : (i += 1) {
+        var i: u8 = 1;
+        const count: usize = self.count - 1;
+        print("DIRECTORY CONTENTS: {d}\n", .{count});
+        while (i < count) : (i += 1) {
             print("  {d}: '{s}'\n", .{ i, self.filename(i) });
         }
     }
@@ -111,76 +118,121 @@ const DirectoryContents = struct {
     }
 };
 
+const Command = struct {
+    // Opens a trackview using index of current directory
+    const invoke_directory_base_index: u8 = 0;
+    const invoke_directory_range: u8 = 64;
+
+    const command_base_index: u8 = 200;
+    const cd_up: u8 = command_base_index + 0;
+    const reset: u8 = command_base_index + 1;
+};
+
 pub const navigation = struct {
     const Event = enum(u8) {
         directory_changed,
-        playlist_opened,
+        trackview_opened,
+        duration_calculated,
     };
 
-    pub var contents: *DirectoryContents = undefined;
-    pub var message_queue: FixedAtomicEventQueue(Event, 10) = .{};
-    pub var current_path: std.fs.IterableDir = undefined;
-    pub var playlist_path_opt: ?std.fs.IterableDir = null;
-    pub var root_depth: u16 = 0;
-    pub var contains_audio: bool = false;
-    pub var subsystem_index: event_system.SubsystemIndex = undefined;
-    pub var action_list: memory.FixedBuffer(ParameterizedAction, 64) = undefined;
-
-    pub fn reset() void {
-        action_list.clear();
+    pub fn calculateDurationsWrapper(storage: *Storage) void {
+        calculateDurations(storage) catch |err| {
+            std.log.err("Failed to calculate durations. Error -> {}", .{err});
+        };
     }
 
-    // All actions except none, cd_up and reset will reference a loaded directory
-    // Therefore it makes sense to store them together
-    pub const ParameterizedAction = packed struct {
-        action: Action,
-        directory_index: u8,
-    };
+    pub fn calculateDurations(storage: *Storage) !void {
+        const entries_count = storage.track_entry_count;
+        std.debug.assert(entries_count <= 64);
 
-    pub const Action = enum(u8) {
-        cd_up,
-        cd_down,
-        reset,
-    };
+        var file_handle_buffer: [64]std.fs.File = undefined;
+        var max_size: usize = 0;
 
-    pub const DoDirectorySelectReturn = struct {
-        // First action index
-        base_action_index: u8,
-        // Number of actions
-        action_count: u8,
-        subsystem: event_system.SubsystemIndex,
+        for (storage.entries()) |entry, entry_i| {
+            const absolute_path = try entry.absolutePathZ();
+            file_handle_buffer[entry_i] = try std.fs.openFileAbsolute(absolute_path, .{ .mode = .read_only });
+            errdefer file_handle_buffer[entry_i].close();
 
-        pub inline fn actionIndexFor(self: *@This(), action_index: u8) u8 {
-            std.debug.assert(self.action_count > action_index);
-            return self.base_action_index + action_index;
-        }
-    };
+            const file_stat = try file_handle_buffer[entry_i].stat();
+            const file_size = file_stat.size;
 
-    // The return value is the first action index
-    // Each subsequent action has a consequetive index
-    pub fn doDirectorySelect() !DoDirectorySelectReturn {
-        const remaining_space = action_list.remainingCount();
-        const directory_count = @intCast(u8, contents.directoryCount());
-        if (directory_count > remaining_space) {
-            return error.InsufficientMemoryAllocated;
+            if (file_size > max_size) {
+                max_size = file_size;
+            }
         }
 
-        const next_action_index = @intCast(u8, action_list.count);
-        var i: u32 = 0;
-        var parameterized_action = ParameterizedAction{
-            .action = .cd_down,
-            .directory_index = undefined,
-        };
-        while (i < directory_count) : (i += 1) {
-            std.debug.assert(i < std.math.maxInt(u8));
-            parameterized_action.directory_index = @intCast(u8, i);
-            _ = action_list.append(parameterized_action);
+        var buffer = try std.heap.page_allocator.alloc(u8, max_size);
+        defer std.heap.page_allocator.free(buffer);
+
+        for (storage.entriesMut()) |*entry, entry_i| {
+            var file_handle = file_handle_buffer[entry_i];
+            const bytes_read = try file_handle.readAll(buffer);
+            entry.duration_seconds = audio.mp3.calculateDurationSecondsFromFile(buffer[0..bytes_read]);
+            try navigation.message_queue.add(.duration_calculated);
+            file_handle.close();
         }
-        return DoDirectorySelectReturn{
-            .base_action_index = next_action_index,
-            .action_count = directory_count,
-            .subsystem = subsystem_index,
-        };
+    }
+
+    pub fn isPlaylistAlsoTrackview() bool {
+        if (Playlist.storage_opt) |playlist_storage| {
+            if (trackview_storage_opt) |trackview_storage| {
+                return playlist_storage == trackview_storage;
+            }
+        }
+        return false;
+    }
+
+    pub var subsystem_index: event_system.SubsystemIndex = undefined;
+
+    pub var directoryview_storage: *DirectoryContents = undefined;
+    pub var trackview_storage_opt: ?*Storage = null;
+
+    pub var directoryview_path: std.fs.IterableDir = undefined;
+    pub var trackview_path_opt: ?std.fs.IterableDir = null;
+
+    pub var message_queue: FixedAtomicEventQueue(Event, 10) = .{};
+    pub var root_depth: u16 = 0;
+    pub var contains_audio: bool = false;
+
+    var calculate_durations_thread: std.Thread = undefined;
+
+    var arena_opt: ?*memory.LinearArena = undefined;
+
+    // pub fn trackViewOpen(index: u8) !void {
+    //     if (arena_opt) |arena| {
+    //         std.log.info("Opening trackview", .{});
+    //         const subpath = directoryview_storage.filename(index);
+    //         trackview_path_opt = try directoryview_path.openDir(subpath, .{ .iterate = true });
+    //         const offset: u32 = 0;
+    //         const max_entries: u16 = 20;
+    //         trackview_storage = try Storage.create(arena, trackview_path_opt.?, offset, max_entries);
+
+    //         calculate_durations_thread = try std.Thread.spawn(.{}, calculateDurationsWrapper, .{trackview_storage});
+    //         try message_queue.add(.trackview_opened);
+    //     } else {
+    //         return error.InvalidArenaReference;
+    //     }
+    // }
+
+    // pub fn doOpenTrackView(directory_index: u8) !event_system.ActionIndex {
+    //     if (directory_index >= directoryview_storage.directoryCount()) {
+    //         std.log.err(
+    //             \\Attempt to create a OpenTrackView command with invalid directory index {d}.
+    //             \\Valid indices are 0 - {d}
+    //         , .{ directory_index, directoryview_storage.directoryCount() - 1 });
+    //         return error.InvalidDirectoryIndex;
+    //     }
+    //     std.debug.assert(directory_index < Command.open_view_range);
+    //     return @intCast(event_system.ActionIndex, directory_index + Command.open_view_base_index);
+    // }
+
+    pub inline fn doDirectorySelect(directory_index: u8) event_system.ActionIndex {
+        std.debug.assert(directory_index < Command.invoke_directory_range);
+        return @intCast(event_system.ActionIndex, directory_index + Command.invoke_directory_base_index);
+    }
+
+    pub inline fn doDirectoryUp() event_system.ActionIndex {
+        return @intCast(event_system.ActionIndex, Command.cd_up);
     }
 
     pub fn parseExtension(file_name: []const u8) ![]const u8 {
@@ -208,16 +260,11 @@ pub const navigation = struct {
         return true;
     }
 
-    pub const InitRet = struct {
-        playlist_index: u16,
-    };
-
     // You could allocate some space for the path of the playlist path
     // Other submodules can take a u16 to it and read
     pub fn init(arena: *memory.LinearArena, path: std.fs.IterableDir) !void {
-        current_path = path;
-
-        action_list.clear();
+        arena_opt = arena;
+        directoryview_path = path;
 
         var path_buffer: [512]u8 = undefined;
         var path_string = try path.dir.realpath(".", path_buffer[0..]);
@@ -229,12 +276,12 @@ pub const navigation = struct {
         path_buffer[path_string.len] = '/';
 
         std.log.info("PATH: '{s}'", .{path_string});
-        contents = arena.create(DirectoryContents);
-        contents.*.count = 0;
-        contents.*.size = 0;
-        contents.*.arena_index = 0;
+        directoryview_storage = arena.create(DirectoryContents);
+        directoryview_storage.*.count = 0;
+        directoryview_storage.*.size = 0;
+        directoryview_storage.*.arena_index = 0;
 
-        contents.add(arena, path_buffer[0 .. path_string.len + 1]);
+        directoryview_storage.add(arena, path_buffer[0 .. path_string.len + 1]);
 
         contains_audio = blk: {
             var iterator = path.iterate();
@@ -259,26 +306,30 @@ pub const navigation = struct {
             if (contains_audio and entry.kind == .File) {
                 const extension = parseExtension(entry.name) catch "";
                 if (matchExtension("MP3", extension) or matchExtension("FLAC", extension)) {
-                    contents.add(arena, entry.name);
+                    directoryview_storage.add(arena, entry.name);
                     count += 1;
                 }
             } else if (!contains_audio and entry.kind == .Directory) {
-                contents.add(arena, entry.name);
+                directoryview_storage.add(arena, entry.name);
                 count += 1;
             }
 
             if (count == 20) break;
         }
 
-        navigation.contents.contentsPrint();
+        navigation.directoryview_storage.contentsPrint();
     }
 
     pub inline fn directoryUp() void {
         // NOTE: This action will invalidate most of the state / memory of the application
         //       As a result this action is passed up so that memory can be managed by a higher system
         if (root_depth > 0) {
-            current_path = current_path.dir.openIterableDir("..", .{}) catch |err| {
+            directoryview_path = directoryview_path.dir.openIterableDir("..", .{}) catch |err| {
                 std.log.err("Failed to change to parent directory. Error: {}", .{err});
+                return;
+            };
+            message_queue.add(.directory_changed) catch |err| {
+                std.log.err("Failed to add .directory_changed event to message queue. Error -> {}", .{err});
                 return;
             };
             root_depth -= 1;
@@ -289,7 +340,7 @@ pub const navigation = struct {
         // NOTE: This action will invalidate most of the state / memory of the application
         //       As a result this action is passed up so that memory can be managed by a higher system
 
-        const directory_count = contents.directoryCount();
+        const directory_count = directoryview_storage.directoryCount();
         if (directory_count == 0) {
             std.log.err("No subdirectories loaded to change into", .{});
             return;
@@ -304,8 +355,8 @@ pub const navigation = struct {
             return;
         }
 
-        const subpath = contents.filename(directory_index);
-        const new_path = current_path.dir.openIterableDir(subpath, .{}) catch |err| {
+        const subpath = directoryview_storage.filename(directory_index);
+        const new_path = directoryview_path.dir.openIterableDir(subpath, .{}) catch |err| {
             std.log.err("Failed to open subpath '{s}'. Error: {}", .{ subpath, err });
             return;
         };
@@ -325,12 +376,12 @@ pub const navigation = struct {
         };
 
         if (has_audio) {
-            playlist_path_opt = new_path;
-            message_queue.add(.playlist_opened) catch |err| {
-                std.log.err("Failed to emit .playlist_opened event. Error: {}", .{err});
+            trackview_path_opt = new_path;
+            message_queue.add(.trackview_opened) catch |err| {
+                std.log.err("Failed to emit .trackview_opened event. Error: {}", .{err});
             };
         } else {
-            current_path = new_path;
+            directoryview_path = new_path;
             root_depth += 1;
             message_queue.add(.directory_changed) catch |err| {
                 std.log.err("Failed to emit .directory_changed event. Error: {}", .{err});
@@ -338,13 +389,19 @@ pub const navigation = struct {
         }
     }
 
-    pub fn doAction(action_index: event_system.ActionIndex) void {
-        const parameterized_action = action_list.items[action_index];
-        std.log.info("Action triggered in navigation subsystem", .{});
-        switch (parameterized_action.action) {
-            .cd_up => directoryUp(),
-            .cd_down => directoryDown(parameterized_action.directory_index),
-            .reset => {},
+    pub fn doAction(index: event_system.ActionIndex) void {
+        std.log.info("navigation doAction invoked", .{});
+
+        const invoke_directory_max = Command.invoke_directory_base_index + Command.invoke_directory_range;
+        if (index >= Command.invoke_directory_base_index and index < invoke_directory_max) {
+            std.log.info("Invoking invoke_directory", .{});
+            directoryDown(@intCast(u8, index - Command.invoke_directory_base_index));
+            return;
+        }
+
+        switch (index) {
+            Command.cd_up => directoryUp(),
+            else => unreachable,
         }
     }
 };

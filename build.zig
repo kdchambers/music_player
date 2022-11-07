@@ -26,16 +26,12 @@ pub fn build(b: *Builder) void {
     exe.addIncludePath("deps/glfw/include/");
     exe.addIncludePath("/usr/include/");
     exe.addIncludePath("/usr/local/include");
+    exe.addIncludePath("deps/libmad");
 
     exe.addPackage(.{
         .name = "shaders",
         .source = .{ .path = "shaders/shaders.zig" },
     });
-
-    const storage_pkg = std.build.Pkg{
-        .name = "storage",
-        .source = .{ .path = lib_src_path ++ "storage.zig" },
-    };
 
     const geometry_pkg = std.build.Pkg{
         .name = "geometry",
@@ -52,9 +48,9 @@ pub fn build(b: *Builder) void {
         .source = .{ .path = lib_src_path ++ "memory.zig" },
     };
 
-    const library_navigator_pkg = std.build.Pkg{
-        .name = "LibraryNavigator",
-        .source = .{ .path = app_src_path ++ "LibraryNavigator.zig" },
+    const storage_pkg = std.build.Pkg{
+        .name = "storage",
+        .source = .{ .path = lib_src_path ++ "storage.zig" },
         .dependencies = &[_]Pkg{memory_pkg},
     };
 
@@ -114,16 +110,16 @@ pub fn build(b: *Builder) void {
         .source = .{
             .path = lib_src_path ++ "audio.zig",
         },
-        .dependencies = &[_]Pkg{ message_queue_pkg, memory_pkg, event_system_pkg },
+        .dependencies = &[_]Pkg{
+            message_queue_pkg,
+            memory_pkg,
+            event_system_pkg,
+            storage_pkg,
+        },
     };
 
     const gen = vkgen.VkGenerateStep.init(b, "deps/vk.xml", "vk.zig");
     const vulkan_pkg = gen.package;
-
-    exe.addPackage(std.build.Pkg{
-        .name = "zigimg",
-        .source = .{ .path = "deps/zigimg/zigimg.zig" },
-    });
 
     const gui_pkg = std.build.Pkg{
         .name = "gui",
@@ -140,11 +136,18 @@ pub fn build(b: *Builder) void {
             message_queue_pkg,
         },
     };
-
-    const action_pkg = std.build.Pkg{
-        .name = "action",
-        .source = .{ .path = app_src_path ++ "action.zig" },
-        .dependencies = &[_]Pkg{ graphics_pkg, gui_pkg, memory_pkg },
+    const playlist_pkg = std.build.Pkg{
+        .name = "Playlist",
+        .source = .{
+            .path = app_src_path ++ "Playlist.zig",
+        },
+        .dependencies = &[_]Pkg{
+            memory_pkg,
+            audio_pkg,
+            storage_pkg,
+            event_system_pkg,
+            message_queue_pkg,
+        },
     };
 
     const ui_pkg = std.build.Pkg{
@@ -154,14 +157,14 @@ pub fn build(b: *Builder) void {
         },
         .dependencies = &[_]Pkg{
             audio_pkg,
-            library_navigator_pkg,
             geometry_pkg,
             graphics_pkg,
             gui_pkg,
             constants_pkg,
             text_pkg,
-            action_pkg,
             event_system_pkg,
+            memory_pkg,
+            playlist_pkg,
         },
     };
 
@@ -170,7 +173,7 @@ pub fn build(b: *Builder) void {
         .source = .{
             .path = app_src_path ++ "glfw_bindings.zig",
         },
-        .dependencies = &[_]Pkg{ geometry_pkg, vulkan_pkg },
+        .dependencies = &[_]Pkg{ geometry_pkg, vulkan_pkg, graphics_pkg },
     };
 
     const vulkan_config_pkg = std.build.Pkg{
@@ -218,15 +221,14 @@ pub fn build(b: *Builder) void {
     exe.addPackage(gui_pkg);
     exe.addPackage(event_system_pkg);
     exe.addPackage(ui_pkg);
-    exe.addPackage(action_pkg);
-    exe.addPackage(library_navigator_pkg);
+    exe.addPackage(playlist_pkg);
+
+    exe.linkLibC();
 
     exe.linkSystemLibrary("ao");
     exe.linkSystemLibrary("glfw");
-    exe.linkSystemLibrary("c");
 
     // TODO: Staticially link or port
-    exe.linkSystemLibrary("FLAC");
     exe.linkSystemLibrary("mad");
 
     exe.install();

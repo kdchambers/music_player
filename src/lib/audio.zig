@@ -10,8 +10,11 @@ const Allocator = std.mem.Allocator;
 const memory = @import("memory");
 const id3 = @import("id3.zig");
 const event_system = @import("event_system");
-
+const storage = @import("storage");
+const String = storage.String;
 const FixedAtomicEventQueue = @import("message_queue").FixedAtomicEventQueue;
+
+pub var subsystem_index: event_system.SubsystemIndex = event_system.null_subsystem_index;
 
 const mad = @cImport({
     @cInclude("mad.h");
@@ -38,127 +41,27 @@ pub const TrackMetadata = struct {
 };
 
 pub fn doAction(action_index: event_system.ActionIndex) void {
-    _ = action_index;
-    std.debug.assert(false);
+    if (action_list.items[action_index] == .play) {
+        const path_index = loaded_tracks.items[action_index];
+        const absolute_path = storage.SubPath.interface.absolutePathZ(path_index) catch |err| {
+            std.log.err("Failed to create path to audio file: {}", .{err});
+            return;
+        };
+        mp3.playFile(std.heap.c_allocator, absolute_path) catch |err| {
+            std.log.err("Failed to play audio file: {s} -> {}", .{ absolute_path, err });
+            return;
+        };
+    }
+}
+
+pub fn reset() void {
+    loaded_tracks.clear();
+    action_list.clear();
+    _ = input_event_buffer.collect();
+    _ = output_event_buffer.collect();
 }
 
 const toSlice = memory.sliceFromNullTerminatedString;
-
-pub const TrackMetadataStorage = packed struct {
-    const Self = @This();
-
-    size: u16,
-    artist_count: u8,
-    title_count: u8,
-    album_count: u8,
-    padding: u8,
-
-    // Layout
-    // TagType, size, string, null
-    // Size is size of string only
-
-    fn print(mem: []const u8) void {
-        var i: usize = 0;
-        while (i < mem.len) {
-            const tag = @intToEnum(TagType, mem[i]);
-            const size = mem[i + 1];
-            const value = mem[i + 2 .. i + 2 + size];
-            std.debug.print("  {} : {d} -> '{s}'\n", .{ tag, size, value });
-            i += (size + 3);
-        }
-    }
-};
-
-const LinearPlaylist = struct {
-    const Entry = struct {
-        directory_id: u8,
-        artist_id: u8,
-    };
-
-    const Self = @This();
-
-    // TODO: You could remove this by allocating LinearPlaylist on arena + using parent ptr
-    base: [*]u8 = undefined,
-    artist_index: u16 = 0,
-    track_index: u16 = 0,
-    entries_index: u16 = 0,
-    filename_index: u16 = 0,
-
-    current: u8 = 0,
-    artist_count: u8 = 0,
-
-    // NOTE: track_count == entries_count == filename_count
-    track_count: u8 = 0,
-    directories_count: u8 = 0,
-
-    pub fn init(self: *Self, start_addr: [*]u8) void {
-        self.base = start_addr;
-    }
-
-    pub fn addDirectory(self: *Self, arena: *memory.LinearArena, directory_path: []const u8) u8 {
-        const source_len = directory_path.len;
-        var new_path = arena.allocate(u8, source_len + 1);
-        std.mem.copy(u8, new_path, directory_path);
-        new_path[source_len] = 0;
-        defer self.directories_count += 1;
-        return self.directories_count;
-    }
-
-    pub fn name(self: Self, index: u8) []const u8 {
-        std.debug.assert(index < self.track_count);
-        var i: u16 = 0;
-        const mem = self.base[self.track_index];
-
-        {
-            var count: u8 = 0;
-            while (count < index) : (i += 1) {
-                if (mem[i] == 0) {
-                    count += 1;
-                }
-            }
-        }
-
-        const start: [*]const u8 = &mem[i + 1];
-        const max_loop_count: u32 = 1024;
-        i = 0;
-        while (i < max_loop_count) : (i += 1) {
-            if (start[i] == 0) {
-                return start[0..i];
-            }
-        }
-
-        std.debug.assert(i < max_loop_count);
-        unreachable;
-    }
-
-    pub fn filename(self: Self, allocator: Allocator, index: u8) []const u8 {
-        _ = allocator;
-        std.debug.assert(index < self.track_count);
-        var i: u16 = 0;
-        const mem = self.base[self.filename_index];
-
-        {
-            var count: u8 = 0;
-            while (count < index) : (i += 1) {
-                if (mem[i] == 0) {
-                    count += 1;
-                }
-            }
-        }
-
-        const start: [*]const u8 = &mem[i + 1];
-        const max_loop_count: u32 = 1024;
-        i = 0;
-        while (i < max_loop_count) : (i += 1) {
-            if (start[i] == 0) {
-                return start[0..i];
-            }
-        }
-
-        std.debug.assert(i < max_loop_count);
-        unreachable;
-    }
-};
 
 var active_thread_handle: std.Thread = undefined;
 var current_audio_buffer: []u8 = undefined;
@@ -180,13 +83,24 @@ pub const AudioEvent = enum(u8) {
 
 pub const InputEvent = enum(u8) {
     deinitialization_requested,
+    play_requested,
+    resume_requested,
     stop_requested,
     pause_requested,
     audio_source_changed,
 };
 
+pub const Action = enum(u8) {
+    play,
+    pause,
+    @"resume",
+};
+
 pub var input_event_buffer: FixedAtomicEventQueue(InputEvent, 10) = .{};
 pub var output_event_buffer: FixedAtomicEventQueue(AudioEvent, 10) = .{};
+
+var action_list: memory.FixedBuffer(Action, 20) = .{};
+var loaded_tracks: memory.FixedBuffer(storage.SubPath.Index, 20) = .{};
 
 pub var current_track: TrackMetadata = undefined;
 
@@ -197,10 +111,10 @@ fn ensureAscii(text: *[]u8) u32 {
     var last_was_null: bool = false;
 
     while (read_index < text.len) : (read_index += 1) {
-        const c = text.*[read_index];
+        const char = text.*[read_index];
 
-        if (!std.ascii.isPrint(c)) {
-            if (c == 0) {
+        if (!std.ascii.isPrint(char)) {
+            if (char == 0) {
                 if (last_was_null == true) {
                     return write_index;
                 }
@@ -212,339 +126,188 @@ fn ensureAscii(text: *[]u8) u32 {
         }
         last_was_null = false;
 
-        text.*[write_index] = c;
+        text.*[write_index] = char;
         write_index += 1;
     }
 
     return write_index;
 }
 
-pub const TrackMetadataIndices = struct {
-    const null_value = std.math.maxInt(u16);
-
-    title: u16 = null_value,
-    artist: u16 = null_value,
-    album: u16 = null_value,
-    duration: u16 = null_value,
-};
-
-const TagType = enum(u8) {
-    album,
-    artist,
-    title,
-};
-
-fn find(mem: []const u8, tag_type: TagType, needle_text: []const u8, max_count: u16) ?u16 {
-    var i: usize = 0;
-    var element_count: u16 = 0;
-    while (i < mem.len and element_count < max_count) {
-        const tag = @intToEnum(TagType, mem[i]);
-        const size = mem[i + 1];
-        if (tag == tag_type) {
-            element_count += 1;
-            const current_text = mem[i + 2 .. i + 2 + size];
-            if (std.mem.eql(u8, needle_text, current_text)) {
-                return @intCast(u16, i);
-            }
-        }
-        i += (size + 3);
-    }
-    return null;
-}
-
-fn add(arena: *memory.LinearArena, text: []const u8, tag_type: TagType) u16 {
-    const result = arena.used;
-
-    for (text) |c, i| {
-        if (!std.ascii.isPrint(c)) {
-            std.log.err("Found invalid char at index {d}", .{i});
-            std.debug.assert(false);
-        }
-    }
-
-    std.log.info("Adding text frame: '{s}'", .{text});
-    var string_type = arena.create(TagType);
-
-    std.debug.assert(arena.used == (result + 1));
-
-    string_type.* = tag_type;
-    var string_length = arena.create(u8);
-    std.debug.assert(arena.used == (result + 2));
-
-    string_length.* = @intCast(u8, text.len);
-    var string = arena.allocate(u8, @intCast(u16, text.len + 1));
-    std.mem.copy(u8, string, text);
-    string[text.len] = 0;
-    std.debug.print("  !{}: {s}\n", .{ tag_type, string[0..text.len] });
-
-    std.debug.print("CP: {d} New {d} Used {d}\n", .{ result, (text.len + 3), arena.used });
-    std.debug.assert(result + (text.len + 3) == arena.used);
-
-    return result;
-}
-
 pub const mp3 = struct {
-    pub fn loadMetaFromDirectory(arena: *memory.LinearArena, directory: std.fs.IterableDir) ![]TrackMetadataIndices {
-        var file_count: u16 = 0;
-        var files_buffer: [64]std.fs.File = undefined;
+    pub fn doPlayAudio(path: storage.SubPath.Index) event_system.ActionIndex {
+        _ = loaded_tracks.append(path);
+        return @intCast(event_system.ActionIndex, action_list.append(.play));
+    }
 
-        {
-            var iterator = directory.iterate();
-            while (try iterator.next()) |entry| {
-                if (entry.name.len <= 4) {
-                    continue;
+    const LoadMetaFromFileFunctionConfig = struct {
+        load_artist: bool = false,
+        load_title: bool = false,
+        load_genre: bool = false,
+        load_album: bool = false,
+    };
+
+    pub fn loadMetaFromFileFunction(comptime config: LoadMetaFromFileFunctionConfig) type {
+        return struct {
+            const IndexType = u16;
+            const null_index = std.math.maxInt(u16);
+
+            const Indices = struct {
+                artist: if (config.load_artist) IndexType else void,
+                title: if (config.load_title) IndexType else void,
+                genre: if (config.load_genre) IndexType else void,
+                album: if (config.load_album) IndexType else void,
+            };
+
+            pub fn loadMetaFromFile(arena: *memory.LinearArena, file: std.fs.File) !Indices {
+                var indices: Indices = undefined;
+
+                comptime var items_to_parse: comptime_int = 0;
+                var items_parsed_count: u32 = 0;
+
+                if (comptime config.load_artist) {
+                    indices.artist = null_index;
+                    items_to_parse += 1;
                 }
 
-                const extension = entry.name[entry.name.len - 3 .. entry.name.len];
-                if (!std.mem.eql(u8, extension, "mp3")) {
-                    continue;
+                if (config.load_title) {
+                    indices.title = null_index;
+                    items_to_parse += 1;
                 }
 
-                std.log.info("Adding: {s}", .{entry.name});
-
-                files_buffer[file_count] = directory.dir.openFile(entry.name, .{}) catch |err| {
-                    std.log.err("Failed to open file '{s}' with err {}", .{ entry.name, err });
-                    return err;
-                };
-                file_count += 1;
-            }
-        }
-
-        var track_metadata_indices = arena.allocate(TrackMetadataIndices, file_count);
-        const storage_base = @ptrCast([*]const u8, arena.peek());
-
-        var metadata_header: TrackMetadataStorage = undefined;
-        metadata_header.size = 0;
-        metadata_header.artist_count = 0;
-        metadata_header.title_count = 0;
-        metadata_header.album_count = 0;
-
-        const files = files_buffer[0..file_count];
-
-        defer {
-            for (files) |*file| {
-                file.close();
-            }
-        }
-
-        for (files) |file, file_i| {
-            var header: id3.Header = undefined;
-            {
-                var header_buffer: []u8 = (@ptrCast([*]u8, &header)[0..@sizeOf(id3.Header)]);
-                var bytes_read: u64 = try file.read(header_buffer);
-
-                if (bytes_read < @sizeOf(id3.Header)) {
-                    std.log.err("Failed to read id3 header. Skipping", .{});
-                    continue;
-                }
-            }
-
-            header.decodeSize();
-
-            if (header.identifier[0] != 'I' or header.identifier[1] != 'D' or header.identifier[2] != '3') {
-                std.log.err("ID3 header is invalid", .{});
-                continue;
-            }
-
-            std.debug.print("Version {d}.{d}\n", .{ header.version_major, header.version_revision });
-            std.debug.print("Flags {d}\n", .{header.flags});
-
-            // TODO: Implement
-            std.debug.assert(header.flags == 0);
-
-            std.debug.print("Size {d}\n", .{header.size});
-
-            const max_frame_size: u32 = 256;
-            var frame_input_buffer: [max_frame_size]u8 = undefined;
-
-            var i: u32 = 0;
-            var frame: *id3.Frame = undefined;
-
-            var is_album_parsed: bool = false;
-            var is_title_parsed: bool = false;
-            var is_artist_parsed: bool = false;
-            // var is_duration_parsed: bool = false;
-
-            const artist_tag = "TPE1";
-            const album_tag = "TALB";
-            const title_tag = "TIT2";
-            // const duration_tag = "TLEN";
-
-            while (i <= header.size) {
-                std.log.info("Index {d} Header {d}", .{ i, header.size });
-
-                _ = try file.read(frame_input_buffer[0..@sizeOf(id3.Frame)]);
-                frame = @ptrCast(*id3.Frame, @alignCast(@alignOf(id3.Frame), &frame_input_buffer[0]));
-
-                frame.size = std.mem.bigToNative(u32, frame.size);
-                if (header.version_major == '4') {
-                    frame.size = id3.synchsafeToU32(frame.size);
+                if (config.load_genre) {
+                    indices.genre = null_index;
+                    items_to_parse += 1;
                 }
 
-                std.log.info("Frame {d} {s}", .{ frame.size, frame.id[0..] });
-
-                if (frame.id[0] == 0) {
-                    // Into post tag padding
-                    break;
+                if (config.load_album) {
+                    indices.album = null_index;
+                    items_to_parse += 1;
                 }
 
-                if (frame.size > header.size) {
-                    std.log.err("Frame {d} is larger than entire header {d}", .{ frame.size, header.size });
-                    return error.InvalidMp3Header;
+                var header: id3.Header = undefined;
+                {
+                    var header_buffer: []u8 = (@ptrCast([*]u8, &header)[0..@sizeOf(id3.Header)]);
+                    var bytes_read: u64 = try file.read(header_buffer);
+
+                    if (bytes_read < @sizeOf(id3.Header)) {
+                        std.log.err("Failed to read id3 header. Skipping", .{});
+                        return error.InvalidHeader;
+                    }
                 }
 
-                // const tag_list = [4]const u8 { artist_tag, album_tag, title_tag, duration_tag };
+                header.decodeSize();
 
-                if (!is_artist_parsed and std.mem.eql(u8, frame.id[0..], artist_tag)) {
-                    is_artist_parsed = true;
-                    var artist_value = frame_input_buffer[@sizeOf(id3.Frame) .. @sizeOf(id3.Frame) + frame.size];
-                    _ = try file.read(artist_value);
+                if (header.identifier[0] != 'I' or header.identifier[1] != 'D' or header.identifier[2] != '3') {
+                    std.log.err("ID3 header is invalid", .{});
+                    return error.InvalidHeader;
+                }
 
-                    const encoding = @intToEnum(id3.TextEncoding, artist_value[0]);
-                    std.log.info("Adding artist '{s}'", .{artist_value});
+                // TODO: Implement
+                std.debug.assert(header.flags == 0);
 
-                    if (encoding != .iso_8859_1) {
-                        std.log.warn("Unsupported text encoding: {}", .{encoding});
+                const max_frame_size: u32 = 256;
+                var frame_input_buffer: [max_frame_size]u8 = undefined;
+
+                var i: u32 = 0;
+                var frame: *id3.Frame = undefined;
+
+                var is_album_parsed: bool = false;
+                var is_title_parsed: bool = false;
+                var is_artist_parsed: bool = false;
+
+                const artist_tag = "TPE1";
+                const album_tag = "TALB";
+                const title_tag = "TIT2";
+
+                while (i <= header.size) {
+                    _ = try file.read(frame_input_buffer[0..@sizeOf(id3.Frame)]);
+                    const alignment = @alignOf(id3.Frame);
+                    frame = @ptrCast(*id3.Frame, @alignCast(alignment, &frame_input_buffer[0]));
+
+                    frame.size = std.mem.bigToNative(u32, frame.size);
+                    if (header.version_major == '4') {
+                        frame.size = id3.synchsafeToU32(frame.size);
                     }
 
-                    track_metadata_indices[file_i].artist = blk: {
-                        if (find(storage_base[0..metadata_header.size], .artist, artist_value[1..], metadata_header.artist_count)) |index| {
-                            break :blk index;
+                    if (frame.id[0] == 0) {
+                        // Into post tag padding
+                        break;
+                    }
+
+                    if (frame.size > header.size) {
+                        std.log.err("Frame {d} is larger than entire header {d}", .{ frame.size, header.size });
+                        return error.InvalidMp3Header;
+                    }
+
+                    if (comptime config.load_artist) {
+                        if (!is_artist_parsed and std.mem.eql(u8, frame.id[0..], artist_tag)) {
+                            is_artist_parsed = true;
+                            items_parsed_count += 1;
+                            var artist_value = frame_input_buffer[@sizeOf(id3.Frame) .. @sizeOf(id3.Frame) + frame.size];
+                            _ = try file.read(artist_value);
+
+                            const encoding = @intToEnum(id3.TextEncoding, artist_value[0]);
+
+                            if (encoding != .iso_8859_1) {
+                                std.log.warn("Unsupported text encoding: {}", .{encoding});
+                            }
+
+                            indices.artist = try String.write(arena, artist_value[1..]);
                         }
-                        metadata_header.artist_count += 1;
-                        // NOTE: +3 is for additional tag_type, size, null terminator
-                        metadata_header.size += @intCast(u16, frame.size + 3);
-                        break :blk add(arena, artist_value[1..], .artist);
-                    };
-                } else if (std.mem.eql(u8, frame.id[0..], album_tag)) {
-                    is_album_parsed = true;
-                    var album_value = frame_input_buffer[@sizeOf(id3.Frame) .. @sizeOf(id3.Frame) + frame.size];
-
-                    _ = try file.read(album_value);
-
-                    const encoding = @intToEnum(id3.TextEncoding, album_value[0]);
-                    if (encoding != .iso_8859_1) {
-                        std.log.warn("Unsupported text encoding: {}", .{encoding});
                     }
 
-                    std.log.info("Adding album '{s}'", .{album_value[1..]});
+                    if (comptime config.load_album) {
+                        if (!is_album_parsed and std.mem.eql(u8, frame.id[0..], album_tag)) {
+                            is_album_parsed = true;
+                            items_parsed_count += 1;
+                            var album_value = frame_input_buffer[@sizeOf(id3.Frame) .. @sizeOf(id3.Frame) + frame.size];
 
-                    track_metadata_indices[file_i].album = blk: {
-                        if (find(storage_base[0..metadata_header.size], .album, album_value[1..], metadata_header.album_count)) |index| {
-                            break :blk index;
+                            _ = try file.read(album_value);
+
+                            const encoding = @intToEnum(id3.TextEncoding, album_value[0]);
+                            if (encoding != .iso_8859_1) {
+                                std.log.warn("Unsupported text encoding: {}", .{encoding});
+                            }
+
+                            indices.album = try String.write(arena, album_value[1..]);
                         }
-                        metadata_header.album_count += 1;
-                        metadata_header.size += @intCast(u16, frame.size + 3);
-                        break :blk add(arena, album_value[1..], .album);
-                    };
-                } else if (std.mem.eql(u8, frame.id[0..], title_tag)) {
-                    is_title_parsed = true;
-                    var title_value = frame_input_buffer[@sizeOf(id3.Frame) .. @sizeOf(id3.Frame) + frame.size];
-                    _ = try file.read(title_value);
-
-                    const encoding = @intToEnum(id3.TextEncoding, title_value[0]);
-                    if (encoding != .iso_8859_1) {
-                        std.log.warn("Unsupported text encoding: {}", .{encoding});
                     }
 
-                    metadata_header.title_count += 1;
-                    metadata_header.size += @intCast(u16, frame.size + 3);
-                    track_metadata_indices[file_i].title = add(arena, title_value[1..], .title);
+                    if (comptime config.load_title) {
+                        if (!is_title_parsed and std.mem.eql(u8, frame.id[0..], title_tag)) {
+                            is_title_parsed = true;
+                            items_parsed_count += 1;
+                            var title_value = frame_input_buffer[@sizeOf(id3.Frame) .. @sizeOf(id3.Frame) + frame.size];
+                            _ = try file.read(title_value);
+
+                            const encoding = @intToEnum(id3.TextEncoding, title_value[0]);
+                            if (encoding != .iso_8859_1) {
+                                std.log.warn("Unsupported text encoding: {}", .{encoding});
+                            }
+
+                            indices.title = try String.write(arena, title_value[1..]);
+                        }
+                    }
+
+                    if (items_parsed_count >= items_to_parse) {
+                        break;
+                    }
+
+                    i += (frame.size + @sizeOf(id3.Frame));
+                    try file.seekTo(@sizeOf(id3.Header) + i);
                 }
 
-                if (is_title_parsed and is_album_parsed and is_artist_parsed) {
-                    break;
-                }
-
-                i += (frame.size + @sizeOf(id3.Frame));
-                try file.seekTo(@sizeOf(id3.Header) + i);
+                return indices;
             }
-        }
-
-        // print(storage_base[0..metadata_header.size]);
-
-        return track_metadata_indices;
+        };
     }
 
     fn errorCallback(data: ?*anyopaque, stream: [*c]mad.mad_stream, frame: [*c]mad.mad_frame) callconv(.C) mad.mad_flow {
         _ = frame;
         _ = data;
 
-        log.err("Failure in mp3 decoding '{}'", .{mad.mad_stream_errorstr(stream)});
+        std.log.err("Failure in mp3 decoding '{s}'", .{mad.mad_stream_errorstr(stream)});
         return mad.MAD_FLOW_CONTINUE;
-    }
-
-    pub fn extractTrackMetadata(
-        filename: [:0]const u8,
-        arena: *memory.LinearArena,
-    ) !TrackMetadataIndices {
-        var track_metadata_indices = TrackMetadataIndices{};
-
-        const max_field_length: u16 = 50;
-        const tag_opt: [*c]id3v2.ID3v2_tag = id3v2.load_tag(filename);
-
-        if (tag_opt == null) {
-            return error.FailedToOpenFile;
-        }
-
-        const tag = tag_opt.?;
-
-        {
-            const title_frame = id3v2.tag_get_title(tag);
-            var title_content = id3v2.parse_text_frame_content(title_frame);
-
-            // TODO: title_content is sometimes null and causes a crash
-            var title_length = @intCast(u32, title_content.*.size);
-            title_length = ensureAscii(&title_content.*.data[0 .. title_length + 1]);
-
-            if (title_length > max_field_length) {
-                title_length = max_field_length;
-                title_content.*.data[max_field_length - 1] = '.';
-                title_content.*.data[max_field_length - 2] = '.';
-                title_content.*.data[max_field_length - 3] = '.';
-                std.log.warn("'{s}' has been elided", .{title_content.*.data[0..title_length]});
-            }
-
-            track_metadata_indices.title = arena.used;
-            if (title_length > 0) {
-                var title = arena.allocate(u8, @intCast(u16, title_length) + 1);
-                std.mem.copy(u8, title, title_content.*.data[0..title_length]);
-                title[title_length] = 0;
-            } else {
-                var title = arena.allocate(u8, 8);
-                std.mem.copy(u8, title, "Unknown");
-                title[7] = 0;
-            }
-        }
-
-        {
-            const artist_frame = id3v2.tag_get_artist(tag);
-            var artist_content = id3v2.parse_text_frame_content(artist_frame);
-            var artist_length = @intCast(u32, artist_content.*.size);
-            artist_length = ensureAscii(&artist_content.*.data[0 .. artist_length + 1]);
-
-            if (artist_length > max_field_length) {
-                artist_length = max_field_length;
-                artist_content.*.data[max_field_length - 1] = '.';
-                artist_content.*.data[max_field_length - 2] = '.';
-                artist_content.*.data[max_field_length - 3] = '.';
-                std.log.warn("'{s}' has been elided", .{artist_content.*.data[0..artist_length]});
-            }
-
-            track_metadata_indices.artist = arena.used;
-
-            if (artist_length > 0) {
-                var artist = arena.allocate(u8, @intCast(u16, artist_length) + 1);
-                std.mem.copy(u8, artist, artist_content.*.data[0..artist_length]);
-                artist[artist_length] = 0;
-            } else {
-                var artist = arena.allocate(u8, 8);
-                std.mem.copy(u8, artist, "Unknown");
-                artist[7] = 0;
-            }
-        }
-
-        return track_metadata_indices;
     }
 
     fn scale(sample: mad.mad_fixed_t) i16 {
@@ -585,8 +348,19 @@ pub const mp3 = struct {
         while (sample_index < samples_count) : (sample_index += 1) {
             for (input_event_buffer.collect()) |event| {
                 switch (event) {
-                    .stop_requested => {},
-                    .pause_requested => {},
+                    .stop_requested => {
+                        output.playback_state = .stopped;
+                        output_event_buffer.add(.stopped) catch |err| {
+                            std.log.err("Failed to add .stopped event to audio message queue. Error -> {}", .{err});
+                        };
+                        return mad.MAD_FLOW_STOP;
+                    },
+                    .pause_requested => {
+                        output.playback_state = .paused;
+                        output_event_buffer.add(.paused) catch |err| {
+                            std.log.err("Failed to add .paused event to audio message queue. Error -> {}", .{err});
+                        };
+                    },
                     .audio_source_changed => {
                         //
                     },
@@ -596,14 +370,27 @@ pub const mp3 = struct {
                 }
             }
 
-            const playback_state = output.getState();
-            while (playback_state == .paused) {
-                std.time.sleep(100000 * 1000);
+            while (output.getState() == .paused) {
+                std.time.sleep(std.time.ns_per_ms * 100);
+                for (input_event_buffer.collect()) |event| {
+                    if (event == .resume_requested) {
+                        output.playback_state = .playing;
+                        output_event_buffer.add(.resumed) catch |err| {
+                            std.log.err("Failed to add .resumed event. Error -> {}", .{err});
+                        };
+                        break;
+                    }
+                }
                 continue;
             }
 
+            const playback_state = output.getState();
             if (playback_state == .stopped) {
                 return mad.MAD_FLOW_STOP;
+            }
+
+            if (playback_state != .playing) {
+                std.log.warn("Playback state not .playing", .{});
             }
 
             const left_block = @bitCast(u16, scale(channel_left[sample_index]));
@@ -638,44 +425,66 @@ pub const mp3 = struct {
         .buffer = undefined,
     };
 
+    pub fn calculateDurationSecondsFromFile(input_buffer: []u8) u16 {
+        var decoder: mad.mad_decoder = undefined;
+        output.audio_duration = 0.0;
+        is_decoded = false;
+        const input_buffer_opt: ?*anyopaque = @ptrCast(*anyopaque, input_buffer.ptr);
+        mad.mad_decoder_init(&decoder, input_buffer_opt, inputCallback, headerCallback, null, null, errorCallback, null);
+        _ = mad.mad_decoder_run(&decoder, mad.MAD_DECODER_MODE_SYNC);
+        _ = mad.mad_decoder_finish(&decoder);
+        return @floatToInt(u16, output.audio_duration);
+    }
+
     fn decode(input_buffer: *[]const u8) void {
         var decoder: mad.mad_decoder = undefined;
         // Initial decode to read headers and calculate length
         output.audio_length = 0;
+        output.audio_duration = 0;
+        is_decoded = false;
         const get_track_length_start_ts: i64 = std.time.milliTimestamp();
 
         mad.mad_decoder_init(&decoder, @ptrCast(*anyopaque, input_buffer), inputCallback, headerCallback, null, null, errorCallback, null);
-        _ = mad.mad_decoder_run(&decoder, mad.MAD_DECODER_MODE_SYNC);
-        _ = mad.mad_decoder_finish(&decoder);
+        if (mad.mad_decoder_run(&decoder, mad.MAD_DECODER_MODE_SYNC) != 0) {
+            std.log.warn("Issue running mad_decoder_run", .{});
+        }
+        if (mad.mad_decoder_finish(&decoder) != 0) {
+            std.log.warn("Issue running mad_decoder_finish", .{});
+        }
 
         // TODO: Don't hardcode these values
-        output.audio_length = @floatToInt(u32, output.audio_duration) * 2 * 2 * 44100;
+        output.audio_length = @floatToInt(u32, output.audio_duration * 2.0 * 2.0 * 44100.0);
         is_decoded = false;
 
         const get_track_length_end_ts: i64 = std.time.milliTimestamp();
-
-        log.info("Decoded audio size: {d}", .{output.audio_length});
-
         assert(get_track_length_end_ts >= get_track_length_start_ts);
-        log.info("Track length decoded in {d} ms", .{get_track_length_end_ts - get_track_length_start_ts});
 
         output_event_buffer.add(.duration_calculated) catch |err| {
             log.err("Failed to add output event: {}", .{err});
         };
 
         output.playback_state = .playing;
-
         output_event_buffer.add(.started) catch |err| {
             log.err("Failed to add output event: {}", .{err});
         };
+
+        // event_system.internalEventHandle(.{ .subsystem = subsystem_index, .index = @intCast(event_system.ActionIndex, @enumToInt(AudioEvent.started)) });
 
         mad.mad_decoder_init(&decoder, @ptrCast(*anyopaque, input_buffer), inputCallback, null, null, outputCallback, errorCallback, null);
         _ = mad.mad_decoder_run(&decoder, mad.MAD_DECODER_MODE_SYNC);
         _ = mad.mad_decoder_finish(&decoder);
 
-        output_event_buffer.add(.finished) catch |err| {
-            std.log.err("Failed to add output Audio event : {}", .{err});
-        };
+        if (output.audio_index >= output.audio_length) {
+            std.log.info("Track finished naturally", .{});
+            output_event_buffer.add(.finished) catch |err| {
+                std.log.err("Failed to add .finished Audio event : {}", .{err});
+            };
+        }
+
+        output.audio_duration = 0;
+        output.audio_index = 0;
+        output.audio_length = 0;
+        output.playback_state = .stopped;
     }
 
     var is_decoded = false;
@@ -744,8 +553,6 @@ pub const mp3 = struct {
         const file_stat = try file.stat();
         const file_size = file_stat.size;
 
-        log.info("Encoded size: {d}", .{file_size});
-
         current_audio_buffer = try allocator.alloc(u8, file_size);
         // TODO: Memory leak
         // defer allocator.free(current_audio_buffer);
@@ -757,11 +564,9 @@ pub const mp3 = struct {
             return error.ReadFileFailed;
         }
 
+        std.log.info("Initializing aolib..", .{});
         try output.init();
         active_thread_handle = try std.Thread.spawn(.{}, decode, .{&current_audio_buffer});
-
-        // TODO
-        // current_track = try extractTrackMetadata(file_path);
     }
 };
 
@@ -855,7 +660,12 @@ pub const flac = struct {
         log.info("Warning: Error occurred in audio processing", .{});
     }
 
-    pub fn writeCallback(decoder: [*c]const libflac.FLAC__StreamDecoder, frame: [*c]const libflac.FLAC__Frame, buffer: [*c]const [*c]const libflac.FLAC__int32, client_data: ?*anyopaque) callconv(.C) libflac.FLAC__StreamDecoderWriteStatus {
+    pub fn writeCallback(
+        decoder: [*c]const libflac.FLAC__StreamDecoder,
+        frame: [*c]const libflac.FLAC__Frame,
+        buffer: [*c]const [*c]const libflac.FLAC__int32,
+        client_data: ?*anyopaque,
+    ) callconv(.C) libflac.FLAC__StreamDecoderWriteStatus {
         _ = decoder;
         var output_buffer = @ptrCast(*OutputBuffer, @alignCast(8, client_data));
 
@@ -971,7 +781,16 @@ pub const output = struct {
             return error.NoAudioSource;
         }
 
-        return @intToFloat(f32, audio_length) / @intToFloat(f32, audio_index);
+        std.debug.assert(audio_length >= 0);
+        if (audio_index >= audio_length) {
+            return 1.0;
+        }
+
+        // TODO: audio_length exceeds audio_index at the end of a track
+        //       Probably the last sample to be added is incomplete
+        std.debug.assert(audio_length >= audio_index);
+
+        return @intToFloat(f32, audio_index) / @intToFloat(f32, audio_length);
     }
 
     pub fn trackLengthSeconds() !u32 {
@@ -999,16 +818,57 @@ pub const output = struct {
                 .rate = 44100,
                 .byte_format = ao.AO_FMT_LITTLE,
             };
-            var default_driver: i32 = 0;
 
             ao.ao_initialize();
-            default_driver = ao.ao_default_driver_id();
 
-            device = ao.ao_open_live(default_driver, &format, null);
-            if (device == null) {
-                log.err("Failed to open ao library", .{});
-                return error.InitializeAoFailed;
-            }
+            device = blk: {
+                var dev: ?*ao.ao_device = null;
+                var driver: i32 = undefined;
+
+                driver = ao.ao_default_driver_id();
+                if (driver >= 0) {
+                    dev = ao.ao_open_live(driver, &format, null);
+                    if (dev != null) {
+                        break :blk dev;
+                    }
+                }
+
+                driver = ao.ao_driver_id("pulse");
+                if (driver >= 0) {
+                    dev = ao.ao_open_live(driver, &format, null);
+                    if (dev != null) {
+                        break :blk dev;
+                    }
+                }
+
+                driver = ao.ao_driver_id("alsa");
+                if (driver >= 0) {
+                    dev = ao.ao_open_live(driver, &format, null);
+                    if (dev != null) {
+                        break :blk dev;
+                    }
+                }
+                driver = ao.ao_driver_id("sndio");
+                if (driver >= 0) {
+                    dev = ao.ao_open_live(driver, &format, null);
+                    if (dev != null) {
+                        break :blk dev;
+                    }
+                }
+                driver = ao.ao_driver_id("oss");
+                if (driver >= 0) {
+                    dev = ao.ao_open_live(driver, &format, null);
+                    if (dev != null) {
+                        break :blk dev;
+                    }
+                }
+
+                return error.FailedToOpenDriver;
+            };
+
+            // TODO:
+            // const driver_info = ao.ao_driver_info(driver);
+            // std.log.info("Audio driver: {s}", .{driver_info[0].name});
 
             try output_event_buffer.add(.initialized);
         }
@@ -1043,9 +903,6 @@ pub const output = struct {
 
             try output_event_buffer.add(.initialized);
         }
-
-        const track_length_seconds = lengthOfAudio(audio_buffer.len, 16, 2, 44100);
-        log.info("Track length seconds: {}", .{track_length_seconds});
 
         const segment_size: u32 = 2 * 2 * 44100;
 

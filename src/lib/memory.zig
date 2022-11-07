@@ -1,10 +1,6 @@
 const std = @import("std");
 const assert = std.debug.assert;
 
-pub fn handleTrigger() void {
-    std.log.info("Handling trigger in memory", .{});
-}
-
 fn sliceFromNullTerminatedString(null_terminated_string: [*:0]const u8) []const u8 {
     var count: u32 = 0;
     const max: u32 = 1024;
@@ -23,7 +19,9 @@ pub const LinearArena = struct {
     used: u16 = 0,
     memory: []u8 = undefined,
 
-    pub inline fn indexFor(self: @This(), value: *u8) u16 {
+    pub inline fn indexFor(self: @This(), value: *const u8) u16 {
+        std.debug.assert(@ptrToInt(self.memory.ptr) <= @ptrToInt(value));
+        std.debug.assert(@ptrToInt(self.memory.ptr) + std.math.maxInt(u16) > @ptrToInt(value));
         return @intCast(u16, @ptrToInt(value) - @ptrToInt(self.memory.ptr));
     }
 
@@ -32,14 +30,20 @@ pub const LinearArena = struct {
     }
 
     pub fn init(self: *Self, backing_memory: []u8) void {
+        @setCold(true);
         std.debug.assert(backing_memory.len > 0);
         self.memory = backing_memory;
         self.used = 0;
     }
 
-    pub fn allocateAligned(self: *Self, comptime T: type, comptime alignment: u23, amount: u16) []T {
-        std.log.info("Allocating {d} bytes from remaining pool of {d}", .{ amount * @sizeOf(T), self.memory.len - self.used });
+    pub fn allocateChild(self: *Self, comptime alignment: u23, amount: u16) @This() {
+        return .{
+            .memory = self.allocateAligned(u8, alignment, amount),
+            .used = 0,
+        };
+    }
 
+    pub fn allocateAligned(self: *Self, comptime T: type, comptime alignment: u23, amount: u16) []T {
         std.debug.assert(self.used < self.memory.len);
         const misaligned_by = (@ptrToInt(&self.memory[self.used]) % alignment);
         const alignment_padding = blk: {
@@ -49,17 +53,11 @@ pub const LinearArena = struct {
             break :blk 0;
         };
 
-        if (alignment_padding > 0) {
-            std.log.warn("Adding {d} bytes of padding for alignment", .{alignment_padding});
-        }
-
         const bytes_required = alignment_padding + (amount * @sizeOf(T));
         std.debug.assert((self.memory.len - self.used) >= bytes_required);
         defer self.used += @intCast(u16, bytes_required);
         var aligned_ptr = @ptrCast([*]T, @alignCast(alignment, &self.memory[self.used + alignment_padding]));
         std.debug.assert(@ptrToInt(aligned_ptr) % alignment == 0);
-
-        // std.log.info("Allocated {d} bytes: {d} remaining", .{ bytes_required, self.memory.len - self.used });
 
         return aligned_ptr[0..amount];
     }
@@ -85,18 +83,12 @@ pub const LinearArena = struct {
         };
         std.debug.assert(alignment_padding < alignment);
 
-        if (alignment_padding > 0) {
-            std.log.warn("Adding {d} bytes of alignment", .{alignment_padding});
-        }
-
         const bytes_required = alignment_padding + @sizeOf(T);
         std.debug.assert((self.memory.len - self.used) >= bytes_required);
 
         defer self.used += @intCast(u16, bytes_required);
         var aligned_ptr = @ptrCast(*T, @alignCast(alignment, &self.memory[self.used + alignment_padding]));
         std.debug.assert(@ptrToInt(aligned_ptr) % alignment == 0);
-
-        std.log.info("Allocated {d} bytes: {d} remaining", .{ bytes_required, (self.memory.len - self.used) - bytes_required });
 
         return aligned_ptr;
     }

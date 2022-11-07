@@ -1536,14 +1536,13 @@ const CMAPFormat2 = struct {
     language: u16,
 };
 
-pub fn initializeFont(allocator: Allocator, data: [*]u8) !FontInfo {
+pub fn initializeFont(allocator: Allocator, data: []u8) !FontInfo {
     _ = allocator;
 
     var cmap: u32 = 0;
-    // var t: u32 = 0;
 
     var font_info: FontInfo = .{
-        .data = data[0..10],
+        .data = data[0..],
         .loca = .{},
         .head = .{},
         .hhea = .{},
@@ -1568,12 +1567,12 @@ pub fn initializeFont(allocator: Allocator, data: [*]u8) !FontInfo {
     // font_info.cff = try allocator.alloc(u8, 0);
 
     {
-        const offset_subtable = OffsetSubtable.fromBigEndianBytes(@intToPtr(*align(4) [@sizeOf(OffsetSubtable)]u8, @ptrToInt(data)));
+        const offset_subtable = OffsetSubtable.fromBigEndianBytes(@intToPtr(*align(4) [@sizeOf(OffsetSubtable)]u8, @ptrToInt(data.ptr)));
         assert(offset_subtable.tables_count < 20);
 
         var i: u32 = 0;
         while (i < offset_subtable.tables_count) : (i += 1) {
-            const entry_addr = @intToPtr(*align(4) [@sizeOf(TableDirectory)]u8, @ptrToInt(data + @sizeOf(OffsetSubtable)) + (@sizeOf(TableDirectory) * i));
+            const entry_addr = @intToPtr(*align(4) [@sizeOf(TableDirectory)]u8, @ptrToInt(data.ptr + @sizeOf(OffsetSubtable)) + (@sizeOf(TableDirectory) * i));
             if (TableDirectory.fromBigEndianBytes(entry_addr)) |table_directory| {
                 var found: bool = false;
                 for (TableTypeList) |valid_tag, valid_tag_i| {
@@ -1630,8 +1629,8 @@ pub fn initializeFont(allocator: Allocator, data: [*]u8) !FontInfo {
         }
     }
 
-    font_info.glyph_count = bigToNative(u16, @intToPtr(*u16, @ptrToInt(data) + font_info.maxp.offset + 4).*);
-    font_info.index_to_loc_format = bigToNative(u16, @intToPtr(*u16, @ptrToInt(data) + font_info.head.offset + 50).*);
+    font_info.glyph_count = bigToNative(u16, @intToPtr(*u16, @ptrToInt(data.ptr) + font_info.maxp.offset + 4).*);
+    font_info.index_to_loc_format = bigToNative(u16, @intToPtr(*u16, @ptrToInt(data.ptr) + font_info.head.offset + 50).*);
 
     if (cmap == 0) {
         return error.RequiredFontTableCmapMissing;
@@ -1649,11 +1648,11 @@ pub fn initializeFont(allocator: Allocator, data: [*]u8) !FontInfo {
         return error.RequiredFontTableHmtxMissing;
     }
 
-    const head = @intToPtr(*Head, @ptrToInt(data) + font_info.head.offset).*;
+    const head = @intToPtr(*Head, @ptrToInt(data.ptr) + font_info.head.offset).*;
     assert(toNative(u32, head.magic_number, .Big) == 0x5F0F3CF5);
 
     // Let's read CMAP tables
-    var cmap_index_table = @intToPtr(*CmapIndex, @ptrToInt(data + cmap)).*;
+    var cmap_index_table = @intToPtr(*CmapIndex, @ptrToInt(data.ptr + cmap)).*;
 
     cmap_index_table.version = toNative(u16, cmap_index_table.version, .Big);
     cmap_index_table.subtables_count = toNative(u16, cmap_index_table.subtables_count, .Big);
@@ -1667,7 +1666,7 @@ pub fn initializeFont(allocator: Allocator, data: [*]u8) !FontInfo {
             assert(@sizeOf(CmapIndex) == 4);
             assert(@sizeOf(CMAPSubtable) == 8);
 
-            const cmap_subtable_addr: [*]u8 = @intToPtr([*]u8, @ptrToInt(data) + cmap + @sizeOf(CmapIndex) + (cmap_subtable_index * @sizeOf(CMAPSubtable)));
+            const cmap_subtable_addr: [*]u8 = @intToPtr([*]u8, @ptrToInt(data.ptr) + cmap + @sizeOf(CmapIndex) + (cmap_subtable_index * @sizeOf(CMAPSubtable)));
             const cmap_subtable = CMAPSubtable.fromBigEndianBytes(cmap_subtable_addr[0..@sizeOf(CMAPSubtable)]).?;
 
             if (cmap_subtable.platform_id == .microsoft and cmap_subtable.platform_specific_id.unicode != .other) {
@@ -1678,7 +1677,7 @@ pub fn initializeFont(allocator: Allocator, data: [*]u8) !FontInfo {
         unreachable;
     };
 
-    const encoding_format: u16 = toNative(u16, @intToPtr(*u16, @ptrToInt(data) + font_info.cmap_encoding_table_offset).*, .Big);
+    const encoding_format: u16 = toNative(u16, @intToPtr(*u16, @ptrToInt(data.ptr) + font_info.cmap_encoding_table_offset).*, .Big);
     _ = encoding_format;
 
     // Load CFF
