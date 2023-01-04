@@ -4,6 +4,3 @@
 [submodule "deps/glfw"]
 	path = deps/glfw
 	url = https://github.com/glfw/glfw
-[submodule "deps/Vulkan-Headers"]
-	path = deps/Vulkan-Headers
-	url = https://github.com/KhronosGroup/Vulkan-Headers

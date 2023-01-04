@@ -12,7 +12,7 @@
 // 4. Read only
 
 const std = @import("std");
-const memory = @import("memory");
+const memory = @import("memory.zig");
 
 /// Secondary semi-global address space that uses 16-bit "pointers"
 const storage = @This();

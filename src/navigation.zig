@@ -4,12 +4,12 @@
 // of the GNU General Public License as published by the Free Software Foundation, version 3.
 
 const std = @import("std");
-const memory = @import("memory");
-const event_system = @import("event_system");
-const FixedAtomicEventQueue = @import("message_queue").FixedAtomicEventQueue;
-const Playlist = @import("Playlist");
+const memory = @import("memory.zig");
+const event_system = @import("event_system.zig");
+const FixedAtomicEventQueue = @import("message_queue.zig").FixedAtomicEventQueue;
+const Playlist = @import("Playlist.zig");
 const Storage = Playlist.Storage;
-const audio = @import("audio");
+const audio = @import("audio.zig");
 
 const DirectoryContents = struct {
     arena_index: u16 = 0,

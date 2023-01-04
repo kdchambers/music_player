@@ -8,32 +8,33 @@ const builtin = @import("builtin");
 const Allocator = std.mem.Allocator;
 const vk = @import("vulkan");
 const vulkan_config = @import("vulkan_config.zig");
-const glfw = @import("glfw");
-const text = @import("text");
-const gui = @import("gui");
-const zvk = @import("vulkan_wrapper");
-const geometry = @import("geometry");
-const graphics = @import("graphics");
+const glfw = @import("glfw_bindings.zig");
+
+const text = @import("text.zig");
+const gui = @import("gui.zig");
+const zvk = @import("vulkan_wrapper.zig");
+const geometry = @import("geometry.zig");
+const graphics = @import("graphics.zig");
 const RGBA = graphics.RGBA;
 const GenericVertex = graphics.GenericVertex;
 const QuadFace = graphics.QuadFace;
-const constants = @import("constants");
+const constants = @import("constants.zig");
 const texture_layer_dimensions = constants.texture_layer_dimensions;
 const texture_layer_size = constants.texture_layer_size;
 const ScreenPixelBaseType = constants.ScreenPixelBaseType;
 const ScreenNormalizedBaseType = constants.ScreenNormalizedBaseType;
 const TexturePixelBaseType = constants.TexturePixelBaseType;
-const event_system = @import("event_system");
-const memory = @import("memory");
+const event_system = @import("event_system.zig");
+const memory = @import("memory.zig");
 const FixedBuffer = memory.FixedBuffer;
-const audio = @import("audio");
-const user_config = @import("user_config");
+const audio = @import("audio.zig");
+const user_config = @import("user_config.zig");
 const QuadFaceWriter = gui.QuadFaceWriter;
 const QuadFaceWriterPool = gui.QuadFaceWriterPool;
-const ui = @import("ui");
+const ui = @import("ui.zig");
 const theme = @import("Theme.zig").default;
 const navigation = @import("navigation.zig").navigation;
-const storage = @import("storage");
+const storage = @import("storage.zig");
 const SubPath = storage.SubPath;
 const AbsolutePath = storage.AbsolutePath;
 const String = storage.String;
@@ -590,6 +591,7 @@ fn recreateSwapchain(allocator: Allocator, app: *GraphicsContext) !void {
 fn setupApplication(allocator: Allocator, app: *GraphicsContext) !void {
     const font_texture_chars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!\"£$%^&*()-_=+[]{};:'@#~,<.>/?\\|";
     glyph_set = try text.createGlyphSet(allocator, constants.default_font_path, font_texture_chars[0..], texture_layer_dimensions);
+    errdefer glyph_set.deinit(allocator);
 
     const memory_properties = app.instance_dispatch.getPhysicalDeviceMemoryProperties(app.physical_device);
     // var memory_properties = zvk.getDevicePhysicalMemoryProperties(app.physical_device);
@@ -884,6 +886,7 @@ fn setupApplication(allocator: Allocator, app: *GraphicsContext) !void {
 
     const surface_capabilities: vk.SurfaceCapabilitiesKHR = try app.instance_dispatch.getPhysicalDeviceSurfaceCapabilitiesKHR(app.physical_device, app.surface);
 
+    app.swapchain_extent = surface_capabilities.current_extent;
     if (surface_capabilities.current_extent.width == 0xFFFFFFFF or surface_capabilities.current_extent.height == 0xFFFFFFFF) {
         const window_size = glfw.getFramebufferSize(app.window);
         std.debug.assert(window_size.width < 10_000 and window_size.height < 10_000);
@@ -898,6 +901,8 @@ fn setupApplication(allocator: Allocator, app: *GraphicsContext) !void {
         screen_dimensions.width = @intCast(ScreenPixelBaseType, app.swapchain_extent.width);
         screen_dimensions.height = @intCast(ScreenPixelBaseType, app.swapchain_extent.height);
     }
+
+    std.log.info("Swapchain extent: {d}, {d}", .{ app.swapchain_extent.width, app.swapchain_extent.height });
 
     app.swapchain = try app.device_dispatch.createSwapchainKHR(app.logical_device, &vk.SwapchainCreateInfoKHR{
         .s_type = vk.StructureType.swapchain_create_info_khr,
@@ -1045,8 +1050,11 @@ fn setupApplication(allocator: Allocator, app: *GraphicsContext) !void {
     }
 
     app.images_available = try allocator.alloc(vk.Semaphore, max_frames_in_flight);
+    errdefer allocator.free(app.images_available);
     app.renders_finished = try allocator.alloc(vk.Semaphore, max_frames_in_flight);
+    errdefer allocator.free(app.renders_finished);
     app.inflight_fences = try allocator.alloc(vk.Fence, max_frames_in_flight);
+    errdefer allocator.free(app.inflight_fences);
 
     const semaphore_create_info = vk.SemaphoreCreateInfo{
         .s_type = vk.StructureType.semaphore_create_info,
@@ -1270,10 +1278,6 @@ fn appLoop(allocator: Allocator, app: *GraphicsContext) !void {
         // TODO: Don't get the screen every frame..
         const screen = glfw.getFramebufferSize(app.window);
 
-        if (screen_dimensions.width <= 0 or screen_dimensions.height <= 0) {
-            return error.InvalidScreenDimensions;
-        }
-
         if (screen.width != screen_dimensions.width or
             screen.height != screen_dimensions.height)
         {
@@ -1285,6 +1289,9 @@ fn appLoop(allocator: Allocator, app: *GraphicsContext) !void {
             scale_factor = ScreenScaleFactor.create(screen_dimensions);
         }
 
+        if (screen_dimensions.width <= 0 or screen_dimensions.height <= 0) {
+            return error.InvalidScreenDimensions;
+        }
         for (audio.output_event_buffer.collect()) |event| {
             if (event == .finished) {
                 std.log.info("Track finished. Starting next..", .{});

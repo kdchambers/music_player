@@ -543,7 +543,11 @@ fn getGlyphShape(allocator: Allocator, info: FontInfo, glyph_index: i32) ![]Vert
         unreachable;
     }
 
-    return allocator.shrink(vertices, vertices_count);
+    if (!allocator.resize(vertices, vertices_count)) {
+        std.log.warn("Failed to shrink vertices", .{});
+    }
+
+    return vertices[0..vertices_count];
 }
 
 pub fn getRequiredDimensions(info: FontInfo, codepoint: i32, scale: Scale2D(f32)) !Dimensions2D(u32) {
@@ -1391,7 +1395,7 @@ const TableDirectory = struct {
 
         var bytes = @ptrCast(*const u32, &self);
         while (iteractions_count > 0) : (iteractions_count -= 1) {
-            _ = @addWithOverflow(u32, sum, bytes.*, &sum);
+            sum = @addWithOverflow(sum, bytes.*).a;
             bytes = @intToPtr(*const u32, @ptrToInt(bytes) + @sizeOf(u32));
         }
 

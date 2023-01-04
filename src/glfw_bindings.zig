@@ -8,7 +8,7 @@
 const std = @import("std");
 const log = std.log;
 // TODO:
-const geometry = @import("geometry");
+const geometry = @import("geometry.zig");
 const vk = @import("vulkan");
 
 pub const c = @cImport({

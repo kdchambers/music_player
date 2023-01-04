@@ -7,12 +7,12 @@ const std = @import("std");
 const log = std.log;
 const assert = std.debug.assert;
 const Allocator = std.mem.Allocator;
-const graphics = @import("graphics");
+const graphics = @import("graphics.zig");
 const GenericVertex = graphics.GenericVertex;
-const geometry = @import("geometry");
+const geometry = @import("geometry.zig");
 const ScaleFactor2D = geometry.ScaleFactor2D;
-const memory = @import("memory");
-const constants = @import("constants");
+const memory = @import("memory.zig");
+const constants = @import("constants.zig");
 const ScreenNormalizedBaseType = constants.ScreenNormalizedBaseType;
 const ScreenPixelBaseType = constants.ScreenPixelBaseType;
 
@@ -127,7 +127,7 @@ pub fn handleTimeEvents(timestamp_ms: i64) void {
     }
 }
 
-pub const SubsystemEventIndex = packed struct {
+pub const SubsystemEventIndex = packed struct(u16) {
     subsystem: SubsystemIndex,
     index: EventIndex,
 };
@@ -138,7 +138,7 @@ pub const SubsystemActionRange = struct {
     index_count: u16,
 };
 
-pub const SubsystemActionIndex = struct {
+pub const SubsystemActionIndex = packed struct(u16) {
     pub const null_subsystem: SubsystemIndex = std.math.maxInt(SubsystemIndex);
     pub const null_value = SubsystemActionIndex{
         .subsystem = null_subsystem,
@@ -188,8 +188,8 @@ const MouseEventEntryType = enum(u8) {
     pattern_grid,
 };
 
-const EventEntry = struct {
-    const Flags = packed struct {
+const EventEntry = packed struct(u16) {
+    const Flags = packed struct(u4) {
         disabled: bool = false,
         reflexive: bool = false,
         reserved_bit_2: bool = undefined,
@@ -207,9 +207,9 @@ test "EventEntry size" {
     try std.testing.expect(@alignOf(EventEntry) == 1);
 }
 
-const MouseEventEntryBase = struct {
-    extent: geometry.Extent2D(f32), // u16 * 4
-    kind: MouseEventEntryType,
+const MouseEventEntryBase = extern struct {
+    extent: geometry.Extent2D(f32),
+    kind: MouseEventEntryType align(4),
     action_count: u8 = 0, // These can be used together to calculate size
     event_count: u8 = 0,
     padding: u8 = 0,
@@ -243,12 +243,12 @@ const MouseEventEntryBase = struct {
     }
 };
 
-const MouseEventEntryExtent = struct {
-    base: MouseEventEntryBase,
+const MouseEventEntryExtent = extern struct {
+    base: MouseEventEntryBase align(4),
 };
 
-const PatternVerticalEntry = struct {
-    base: MouseEventEntryBase,
+const PatternVerticalEntry = extern struct {
+    base: MouseEventEntryBase align(4),
     gap: f32,
     count: u8,
     reserved: u24,
@@ -301,7 +301,7 @@ pub const MouseEventWriter = struct {
 
     pub fn init(self: *@This(), arena: *memory.LinearArena, size: u16) void {
         self.*.backing_arena = memory.LinearArena{
-            .memory = arena.allocateAligned(u8, 2, size),
+            .memory = arena.allocateAligned(u8, 4, size),
             .used = 0,
         };
         self.*.count = 0;
@@ -496,8 +496,19 @@ pub fn handleMouseEvents(
     // Loop through all the attachments
     while (i < mouse_event_writer.count) : (i += 1) {
         const alignment = @alignOf(MouseEventEntryBase);
+        std.log.info("MouseEventEntryBase alignment: {d}", .{alignment});
+        // std.debug.assert(alignment == @alignOf(f32));
+        std.debug.assert(alignment == 4);
+        std.log.info("Offset: {d}", .{offset});
         var current_attachment = @ptrCast(*MouseEventEntryBase, @alignCast(alignment, &mouse_event_writer.backing_arena.memory[offset]));
+        std.log.info("Extent size: {d}", .{@sizeOf(geometry.Extent2D(u32))});
+        std.log.info("Extent align: {d}", .{@alignOf(geometry.Extent2D(u32))});
+        std.log.info("EventEntry size: {d}", .{@sizeOf(EventEntry)});
+        std.log.info("EventEntry align: {d}", .{@alignOf(EventEntry)});
+        std.log.info("MouseEventEntryBase size: {d}", .{@sizeOf(MouseEventEntryBase)});
+        std.debug.assert(@sizeOf(MouseEventEntryBase) == (4 * 4) + 4);
         offset += @sizeOf(MouseEventEntryBase);
+        std.debug.assert(offset % 4 == 0);
 
         std.debug.assert(current_attachment.kind == .extent);
 

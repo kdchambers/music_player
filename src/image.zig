@@ -10,7 +10,7 @@ const Allocator = std.mem.Allocator;
 
 const graphics = @import("graphics.zig");
 const RGBA = graphics.RGBA;
-const geometry = @import("geometry");
+const geometry = @import("geometry.zig");
 
 const zigimg = @import("zigimg");
 

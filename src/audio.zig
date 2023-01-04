@@ -7,12 +7,12 @@ const std = @import("std");
 const assert = std.debug.assert;
 const log = std.log;
 const Allocator = std.mem.Allocator;
-const memory = @import("memory");
+const memory = @import("memory.zig");
 const id3 = @import("id3.zig");
-const event_system = @import("event_system");
-const storage = @import("storage");
+const event_system = @import("event_system.zig");
+const storage = @import("storage.zig");
 const String = storage.String;
-const FixedAtomicEventQueue = @import("message_queue").FixedAtomicEventQueue;
+const FixedAtomicEventQueue = @import("message_queue.zig").FixedAtomicEventQueue;
 
 pub var subsystem_index: event_system.SubsystemIndex = event_system.null_subsystem_index;
 

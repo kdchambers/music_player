@@ -3,7 +3,7 @@
 // This program is free software: you can redistribute it and/or modify it under the terms
 // of the GNU General Public License as published by the Free Software Foundation, version 3.
 
-const Color = @import("graphics").RGBA(f32);
+const Color = @import("../graphics.zig").RGBA(f32);
 const Theme = @import("../Theme.zig").Theme;
 
 fn fromInt(r: u8, g: u8, b: u8) Color {

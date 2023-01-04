@@ -53,7 +53,7 @@ pub fn Dimensions2D(comptime BaseType: type) type {
 }
 
 pub fn Extent2D(comptime BaseType: type) type {
-    return packed struct {
+    return extern struct {
         x: BaseType,
         y: BaseType,
         height: BaseType,

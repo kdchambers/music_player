@@ -5,7 +5,7 @@
 
 const std = @import("std");
 const vk = @import("vulkan");
-const vulkan_config = @import("vulkan_config");
+const vulkan_config = @import("vulkan_config.zig");
 const glfw = @import("glfw");
 const assert = std.debug.assert;
 const log = std.log;

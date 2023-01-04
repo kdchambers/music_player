@@ -13,9 +13,9 @@ const info = std.debug.warn;
 const assert = std.debug.assert;
 const Allocator = std.mem.Allocator;
 
-const geometry = @import("geometry");
-const graphics = @import("graphics");
-const font = @import("font");
+const geometry = @import("geometry.zig");
+const graphics = @import("graphics.zig");
+const font = @import("font.zig");
 
 const Mesh = graphics.Mesh;
 const RGBA = graphics.RGBA;
@@ -23,10 +23,10 @@ const GenericVertex = graphics.GenericVertex;
 const ScaleFactor2D = geometry.ScaleFactor2D;
 const QuadFace = graphics.QuadFace;
 
-const utility = @import("utility");
+const utility = @import("utility.zig");
 const digitCount = utility.digitCount;
 
-const constants = @import("constants");
+const constants = @import("constants.zig");
 
 const TexturePixelBaseType = constants.TexturePixelBaseType;
 const TextureNormalizedBaseType = constants.TextureNormalizedBaseType;

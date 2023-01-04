@@ -4,7 +4,7 @@
 // of the GNU General Public License as published by the Free Software Foundation, version 3.
 
 const std = @import("std");
-const memory = @import("memory");
+const memory = @import("memory.zig");
 
 const LibraryNavigator = @This();
 

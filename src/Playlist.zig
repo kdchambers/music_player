@@ -4,14 +4,14 @@
 // of the GNU General Public License as published by the Free Software Foundation, version 3.
 
 const std = @import("std");
-const memory = @import("memory");
-const audio = @import("audio");
-const mini_addr = @import("storage");
-const event_system = @import("event_system");
+const memory = @import("memory.zig");
+const audio = @import("audio.zig");
+const mini_addr = @import("storage.zig");
+const event_system = @import("event_system.zig");
 const String = mini_addr.String;
 const AbsolutePath = mini_addr.AbsolutePath;
 const SubPath = mini_addr.SubPath;
-const FixedAtomicEventQueue = @import("message_queue").FixedAtomicEventQueue;
+const FixedAtomicEventQueue = @import("message_queue.zig").FixedAtomicEventQueue;
 const navigation = @import("navigation.zig").navigation;
 
 pub var subsystem_index: event_system.SubsystemIndex = undefined;

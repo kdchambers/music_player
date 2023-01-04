@@ -5,19 +5,19 @@
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
-const geometry = @import("geometry");
+const geometry = @import("geometry.zig");
 const ScaleFactor2D = geometry.ScaleFactor2D;
-const graphics = @import("graphics");
+const graphics = @import("graphics.zig");
 const QuadFace = graphics.QuadFace;
-const text = @import("text");
-const util = @import("utility");
+const text = @import("text.zig");
+const util = @import("utility.zig");
 const RGBA = graphics.RGBA;
 const Color = RGBA(f32);
 const memory = @import("memory.zig");
 const GenericVertex = graphics.GenericVertex;
-const constants = @import("constants");
-const event_system = @import("event_system");
-const FixedAtomicEventQueue = @import("message_queue").FixedAtomicEventQueue;
+const constants = @import("constants.zig");
+const event_system = @import("event_system.zig");
+const FixedAtomicEventQueue = @import("message_queue.zig").FixedAtomicEventQueue;
 
 const TextureNormalizedBaseType = constants.TextureNormalizedBaseType;
 const TexturePixelBaseType = constants.TexturePixelBaseType;

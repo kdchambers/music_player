@@ -4,21 +4,21 @@
 // of the GNU General Public License as published by the Free Software Foundation, version 3.
 
 const std = @import("std");
-const geometry = @import("geometry");
-const graphics = @import("graphics");
-const gui = @import("gui");
+const geometry = @import("geometry.zig");
+const graphics = @import("graphics.zig");
+const gui = @import("gui.zig");
 const GenericVertex = graphics.GenericVertex;
 const Theme = @import("Theme.zig");
 const QuadFaceWriter = gui.QuadFaceWriter;
-const ScreenNormalizedBaseType = @import("constants").ScreenNormalizedBaseType;
-const ScreenPixelBaseType = @import("constants").ScreenPixelBaseType;
-const TexturePixelBaseType = @import("constants").TexturePixelBaseType;
-const GlyphSet = @import("text").GlyphSet;
-const event_system = @import("event_system");
-const audio = @import("audio");
-const memory = @import("memory");
+const ScreenNormalizedBaseType = @import("constants.zig").ScreenNormalizedBaseType;
+const ScreenPixelBaseType = @import("constants.zig").ScreenPixelBaseType;
+const TexturePixelBaseType = @import("constants.zig").TexturePixelBaseType;
+const GlyphSet = @import("text.zig").GlyphSet;
+const event_system = @import("event_system.zig");
+const audio = @import("audio.zig");
+const memory = @import("memory.zig");
 const navigation = @import("navigation.zig").navigation;
-const Playlist = @import("Playlist");
+const Playlist = @import("Playlist.zig");
 
 const ScreenScaleFactor = graphics.ScreenScaleFactor(.{
     .NDCRightType = ScreenNormalizedBaseType,
