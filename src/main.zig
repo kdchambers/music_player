@@ -76,29 +76,10 @@ const ScreenScaleFactor = graphics.ScreenScaleFactor(
 );
 var scale_factor: ScreenScaleFactor = undefined;
 
-const RewindLevel = enum(u8) {
-    directory_changed = 0,
-    track_changed,
-    none = std.math.maxInt(u8),
-};
-
-var rewind_level: RewindLevel = .none;
-var arena_checkpoints: [2]u32 = undefined;
-
-const RewindPoints = struct {
-    const null_value = std.math.maxInt(u16);
-
-    track_metadata: u16 = null_value,
-    directory_list: u16 = null_value,
-    audio_started: u16 = null_value,
-};
-
 const AudioDurationTime = packed struct {
     seconds: u16,
     minutes: u16,
 };
-
-var rewind_points: RewindPoints = .{};
 
 var screen_dimensions = geometry.Dimensions2D(ScreenPixelBaseType){
     .width = 0,
@@ -666,7 +647,7 @@ fn setupApplication(allocator: Allocator, app: *GraphicsContext) !void {
             },
             .mip_levels = 1,
             .array_layers = 2,
-            .initial_layout = .@"undefined",
+            .initial_layout = .undefined,
             .usage = .{ .transfer_dst_bit = true, .sampled_bit = true },
             .samples = .{ .@"1_bit" = true },
             .sharing_mode = .exclusive,
@@ -760,7 +741,7 @@ fn setupApplication(allocator: Allocator, app: *GraphicsContext) !void {
                     .p_next = null,
                     .src_access_mask = .{},
                     .dst_access_mask = .{ .transfer_write_bit = true },
-                    .old_layout = .@"undefined",
+                    .old_layout = .undefined,
                     .new_layout = .TRANSFER_DST_OPTIMAL,
                     .src_queue_family_index = vk.queue_family_ignored,
                     .dst_queue_family_index = vk.queue_family_ignored,
@@ -831,7 +812,7 @@ fn setupApplication(allocator: Allocator, app: *GraphicsContext) !void {
             .p_next = null,
             .src_access_mask = .{},
             .dst_access_mask = .{ .shader_read_bit = true },
-            .old_layout = .@"undefined",
+            .old_layout = .undefined,
             .new_layout = .shader_read_only_optimal,
             .src_queue_family_index = vk.QUEUE_FAMILY_IGNORED,
             .dst_queue_family_index = vk.QUEUE_FAMILY_IGNORED,
@@ -1360,8 +1341,6 @@ fn appLoop(allocator: Allocator, app: *GraphicsContext) !void {
                     }
                 },
                 .directory_changed => {
-                    // const checkpoint_index = @enumToInt(RewindLevel.directory_changed);
-                    // main_arena.rewindTo(@intCast(u16, arena_checkpoints[checkpoint_index]));
                     try navigation.init(&main_arena, navigation.directoryview_path);
                     is_draw_required = true;
                 },
@@ -1607,7 +1586,7 @@ fn createRenderPass(app: GraphicsContext) !vk.RenderPass {
                 .store_op = .store,
                 .stencil_load_op = .dont_care,
                 .stencil_store_op = .dont_care,
-                .initial_layout = .@"undefined",
+                .initial_layout = .undefined,
                 .final_layout = .present_src_khr,
                 .flags = .{},
             },
@@ -1653,11 +1632,11 @@ fn createDescriptorPool(app: GraphicsContext) !vk.DescriptorPool {
     const image_count: u32 = @intCast(u32, app.swapchain_image_views.len);
     const descriptor_pool_sizes = [_]vk.DescriptorPoolSize{
         .{
-            .@"type" = .sampler,
+            .type = .sampler,
             .descriptor_count = image_count,
         },
         .{
-            .@"type" = .sampled_image,
+            .type = .sampled_image,
             // TODO * 2 ?
             .descriptor_count = image_count * 2,
         },
